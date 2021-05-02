@@ -209,8 +209,6 @@ const (
 
 // SearchQuery is used for sending search queries from vmselect to vmstorage.
 type SearchQuery struct {
-	AccountID    uint32
-	ProjectID    uint32
 	MinTimestamp int64
 	MaxTimestamp int64
 	TagFilterss  [][]TagFilter
@@ -295,8 +293,7 @@ func (tf *TagFilter) Unmarshal(src []byte) ([]byte, error) {
 // String returns string representation of the search query.
 func (sq *SearchQuery) String() string {
 	var bb bytesutil.ByteBuffer
-	fmt.Fprintf(&bb, "AccountID=%d, ProjectID=%d, MinTimestamp=%s, MaxTimestamp=%s, TagFilters=[\n",
-		sq.AccountID, sq.ProjectID, timestampToTime(sq.MinTimestamp), timestampToTime(sq.MaxTimestamp))
+	fmt.Fprintf(&bb, "MinTimestamp=%s, MaxTimestamp=%s, TagFilters=[\n", timestampToTime(sq.MinTimestamp), timestampToTime(sq.MaxTimestamp))
 	for _, tagFilters := range sq.TagFilterss {
 		for _, tf := range tagFilters {
 			fmt.Fprintf(&bb, "%s", tf.String())
@@ -309,8 +306,6 @@ func (sq *SearchQuery) String() string {
 
 // Marshal appends marshaled sq to dst and returns the result.
 func (sq *SearchQuery) Marshal(dst []byte) []byte {
-	dst = encoding.MarshalUint32(dst, sq.AccountID)
-	dst = encoding.MarshalUint32(dst, sq.ProjectID)
 	dst = encoding.MarshalVarInt64(dst, sq.MinTimestamp)
 	dst = encoding.MarshalVarInt64(dst, sq.MaxTimestamp)
 	dst = encoding.MarshalVarUint64(dst, uint64(len(sq.TagFilterss)))
@@ -333,18 +328,6 @@ func (sq *SearchQuery) Marshal(dst []byte) []byte {
 
 // Unmarshal unmarshals sq from src and returns the tail.
 func (sq *SearchQuery) Unmarshal(src []byte) ([]byte, error) {
-	if len(src) < 4 {
-		return src, fmt.Errorf("cannot unmarshal AccountID: too short src len: %d; must be at least %d bytes", len(src), 4)
-	}
-	sq.AccountID = encoding.UnmarshalUint32(src)
-	src = src[4:]
-
-	if len(src) < 4 {
-		return src, fmt.Errorf("cannot unmarshal ProjectID: too short src len: %d; must be at least %d bytes", len(src), 4)
-	}
-	sq.ProjectID = encoding.UnmarshalUint32(src)
-	src = src[4:]
-
 	tail, minTs, err := encoding.UnmarshalVarInt64(src)
 	if err != nil {
 		return src, fmt.Errorf("cannot unmarshal MinTimestamp: %w", err)

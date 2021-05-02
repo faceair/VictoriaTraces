@@ -19,11 +19,11 @@ type TagFilters struct {
 	tfs []tagFilter
 
 	// Common prefix for all the tag filters.
-	// Contains encoded nsPrefixTagToMetricIDs + accountID + projectID.
+	// Contains encoded nsPrefixTagToMetricIDs
 	commonPrefix []byte
 }
 
-// NewTagFilters returns new TagFilters for the given accountID and projectID.
+// NewTagFilters returns new TagFilters for the given.
 func NewTagFilters() *TagFilters {
 	return &TagFilters{
 		commonPrefix: marshalCommonPrefix(nil, nsPrefixTagTimeToTraceID),
@@ -135,7 +135,7 @@ func (tfs *TagFilters) String() string {
 	return bb.String()
 }
 
-// Reset resets the tf for the given accountID and projectID
+// Reset resets the tf
 func (tfs *TagFilters) Reset() {
 	tfs.tfs = tfs.tfs[:0]
 	tfs.commonPrefix = marshalCommonPrefix(tfs.commonPrefix[:0], nsPrefixTagTimeToTraceID)
@@ -156,7 +156,7 @@ type tagFilter struct {
 	isRegexp   bool
 	matchCost  uint64
 
-	// Prefix always contains {nsPrefixTagToMetricIDs, AccountID, ProjectID, key}.
+	// Prefix always contains {nsPrefixTagToMetricIDs, key}.
 	// Additionally it contains:
 	//  - value if !isRegexp.
 	//  - non-regexp prefix if isRegexp.

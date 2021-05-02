@@ -542,17 +542,17 @@ var (
 // ErrDeadlineExceeded is returned when the request times out.
 var ErrDeadlineExceeded = fmt.Errorf("deadline exceeded")
 
-// SearchTagKeys searches for tag keys for the given (accountID, projectID).
+// SearchTagKeys searches for tag keys.
 func (s *Storage) SearchTagKeys(maxTagKeys int, deadline uint64) ([]string, error) {
 	return s.idb().SearchTagKeys(maxTagKeys, deadline)
 }
 
-// SearchTagValues searches for tag values for the given tagKey in (accountID, projectID).
+// SearchTagValues searches for tag values.
 func (s *Storage) SearchTagValues(tagKey []byte, maxTagValues int, deadline uint64) ([]string, error) {
 	return s.idb().SearchTagValues(tagKey, maxTagValues, deadline)
 }
 
-// SearchTagEntries returns a list of (tagName -> tagValues) for (accountID, projectID).
+// SearchTagEntries returns a list of (tagName -> tagValues).
 func (s *Storage) SearchTagEntries(maxTagKeys, maxTagValues int, deadline uint64) ([]TagEntry, error) {
 	idb := s.idb()
 	keys, err := idb.SearchTagKeys(maxTagKeys, deadline)

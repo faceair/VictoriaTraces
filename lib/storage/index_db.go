@@ -407,9 +407,6 @@ type indexSearch struct {
 	kb bytesutil.ByteBuffer
 	mp tagToTraceIDsRowParser
 
-	accountID uint32
-	projectID uint32
-
 	// deadline in unix timestamp seconds for the given search.
 	deadline uint64
 
@@ -436,8 +433,6 @@ func (db *indexDB) putIndexSearch(is *indexSearch) {
 	is.ts.MustClose()
 	is.kb.Reset()
 	is.mp.Reset()
-	is.accountID = 0
-	is.projectID = 0
 	is.deadline = 0
 
 	// Do not reset tsidByNameMisses and tsidByNameSkips,
@@ -570,7 +565,7 @@ func putIndexItems(ii *indexItems) {
 
 var indexItemsPool sync.Pool
 
-// SearchTagKeys returns all the tag keys for the given accountID, projectID.
+// SearchTagKeys returns all the tag keys.
 func (db *indexDB) SearchTagKeys(maxTagKeys int, deadline uint64) ([]string, error) {
 	// TODO: cache results?
 
@@ -980,7 +975,7 @@ func (mp *tagToTraceIDsRowParser) InitOnlyTail(b, tail []byte) error {
 
 // EqualPrefix returns true if prefixes for mp and x are equal.
 //
-// Prefix contains (tag, accountID, projectID)
+// Prefix contains (tag)
 func (mp *tagToTraceIDsRowParser) EqualPrefix(x *tagToTraceIDsRowParser) bool {
 	if !mp.Tag.Equal(&x.Tag) {
 		return false
