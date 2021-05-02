@@ -505,18 +505,6 @@ func (ctx *vmselectRequestCtx) readUint64() (uint64, error) {
 	return n, nil
 }
 
-func (ctx *vmselectRequestCtx) readAccountIDProjectID() (uint32, uint32, error) {
-	accountID, err := ctx.readUint32()
-	if err != nil {
-		return 0, 0, fmt.Errorf("cannot read accountID: %w", err)
-	}
-	projectID, err := ctx.readUint32()
-	if err != nil {
-		return 0, 0, fmt.Errorf("cannot read projectID: %w", err)
-	}
-	return accountID, projectID, nil
-}
-
 func (ctx *vmselectRequestCtx) readDataBufBytes(maxDataSize int) error {
 	ctx.sizeBuf = bytesutil.Resize(ctx.sizeBuf, 8)
 	if _, err := io.ReadFull(ctx.bc, ctx.sizeBuf); err != nil {

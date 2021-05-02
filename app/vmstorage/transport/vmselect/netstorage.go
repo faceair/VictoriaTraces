@@ -881,6 +881,7 @@ func SearchMetricNames(denyPartialResponse bool, sq *storage.SearchQuery, deadli
 	if deadline.Exceeded() {
 		return nil, false, fmt.Errorf("timeout exceeded before starting to search metric names: %s", deadline.String())
 	}
+	sq.FetchData = storage.NotFetch
 	requestData := sq.Marshal(nil)
 
 	// Send the query to all the storage nodes in parallel.
@@ -933,10 +934,11 @@ func SearchMetricNames(denyPartialResponse bool, sq *storage.SearchQuery, deadli
 // ProcessSearchQuery performs sq until the given deadline.
 //
 // Results.RunParallel or Results.Cancel must be called on the returned Results.
-func ProcessSearchQuery(denyPartialResponse bool, sq *storage.SearchQuery, fetchData bool, deadline searchutils.Deadline) (*Results, bool, error) {
+func ProcessSearchQuery(denyPartialResponse bool, sq *storage.SearchQuery, deadline searchutils.Deadline) (*Results, bool, error) {
 	if deadline.Exceeded() {
 		return nil, false, fmt.Errorf("timeout exceeded before starting the query processing: %s", deadline.String())
 	}
+	fetchData := sq.FetchData == storage.NotFetch
 	tr := storage.ScanRange{
 		MinTimestamp: sq.MinTimestamp,
 		MaxTimestamp: sq.MaxTimestamp,
@@ -962,7 +964,7 @@ func ProcessSearchQuery(denyPartialResponse bool, sq *storage.SearchQuery, fetch
 		}
 		return nil
 	}
-	isPartial, err := processSearchQuery(denyPartialResponse, sq, fetchData, processBlock, deadline)
+	isPartial, err := processSearchQuery(denyPartialResponse, sq, processBlock, deadline)
 
 	// Make sure processBlock isn't called anymore in order to protect from data races.
 	atomic.StoreUint32(&stopped, 1)
@@ -993,14 +995,13 @@ func ProcessSearchQuery(denyPartialResponse bool, sq *storage.SearchQuery, fetch
 	return &rss, isPartial, nil
 }
 
-func processSearchQuery(denyPartialResponse bool, sq *storage.SearchQuery, fetchData bool,
-	processBlock func(mb *storage.Block) error, deadline searchutils.Deadline) (bool, error) {
+func processSearchQuery(denyPartialResponse bool, sq *storage.SearchQuery, processBlock func(mb *storage.Block) error, deadline searchutils.Deadline) (bool, error) {
 	requestData := sq.Marshal(nil)
 
 	// Send the query to all the storage nodes in parallel.
 	snr := startStorageNodesRequest(denyPartialResponse, func(idx int, sn *storageNode) interface{} {
 		sn.searchRequests.Inc()
-		err := sn.processSearchQuery(requestData, fetchData, processBlock, deadline)
+		err := sn.processSearchQuery(requestData, processBlock, deadline)
 		if err != nil {
 			sn.searchErrors.Inc()
 			err = fmt.Errorf("cannot perform search on vmstorage %s: %w", sn.connPool.Addr(), err)
@@ -1298,11 +1299,10 @@ func (sn *storageNode) getLabelValues(labelName string, deadline searchutils.Dea
 	return labelValues, nil
 }
 
-func (sn *storageNode) getTagValueSuffixes(accountID, projectID uint32, tr storage.ScanRange, tagKey, tagValuePrefix string,
-	delimiter byte, deadline searchutils.Deadline) ([]string, error) {
+func (sn *storageNode) getTagValueSuffixes(tr storage.ScanRange, tagKey, tagValuePrefix string, delimiter byte, deadline searchutils.Deadline) ([]string, error) {
 	var suffixes []string
 	f := func(bc *handshake.BufferedConn) error {
-		ss, err := sn.getTagValueSuffixesOnConn(bc, accountID, projectID, tr, tagKey, tagValuePrefix, delimiter)
+		ss, err := sn.getTagValueSuffixesOnConn(bc, tr, tagKey, tagValuePrefix, delimiter)
 		if err != nil {
 			return err
 		}
@@ -1378,10 +1378,10 @@ func (sn *storageNode) processSearchMetricNames(requestData []byte, deadline sea
 	return metricNames, nil
 }
 
-func (sn *storageNode) processSearchQuery(requestData []byte, fetchData bool, processBlock func(mb *storage.Block) error, deadline searchutils.Deadline) error {
+func (sn *storageNode) processSearchQuery(requestData []byte, processBlock func(mb *storage.Block) error, deadline searchutils.Deadline) error {
 	var blocksRead int
 	f := func(bc *handshake.BufferedConn) error {
-		n, err := sn.processSearchQueryOnConn(bc, requestData, fetchData, processBlock)
+		n, err := sn.processSearchQueryOnConn(bc, requestData, processBlock)
 		if err != nil {
 			return err
 		}
@@ -1685,8 +1685,7 @@ func readLabelValues(buf []byte, bc *handshake.BufferedConn) ([]string, []byte, 
 	}
 }
 
-func (sn *storageNode) getTagValueSuffixesOnConn(bc *handshake.BufferedConn, accountID, projectID uint32,
-	tr storage.ScanRange, tagKey, tagValuePrefix string, delimiter byte) ([]string, error) {
+func (sn *storageNode) getTagValueSuffixesOnConn(bc *handshake.BufferedConn, tr storage.ScanRange, tagKey, tagValuePrefix string, delimiter byte) ([]string, error) {
 	// Send the request to sn.
 	if err := writeTimeRange(bc, tr); err != nil {
 		return nil, err
@@ -1835,13 +1834,10 @@ func (sn *storageNode) processSearchMetricNamesOnConn(bc *handshake.BufferedConn
 
 const maxMetricNameSize = 64 * 1024
 
-func (sn *storageNode) processSearchQueryOnConn(bc *handshake.BufferedConn, requestData []byte, fetchData bool, processBlock func(mb *storage.Block) error) (int, error) {
+func (sn *storageNode) processSearchQueryOnConn(bc *handshake.BufferedConn, requestData []byte, processBlock func(mb *storage.Block) error) (int, error) {
 	// Send the request to sn.
 	if err := writeBytes(bc, requestData); err != nil {
 		return 0, fmt.Errorf("cannot write requestData: %w", err)
-	}
-	if err := writeBool(bc, fetchData); err != nil {
-		return 0, fmt.Errorf("cannot write fetchData=%v: %w", fetchData, err)
 	}
 	if err := bc.Flush(); err != nil {
 		return 0, fmt.Errorf("cannot flush requestData to conn: %w", err)

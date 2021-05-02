@@ -11,47 +11,184 @@ import (
 	"github.com/VictoriaMetrics/metrics"
 	"github.com/faceair/VictoriaTraces/app/vmstorage/transport/vminsert"
 	"github.com/faceair/VictoriaTraces/app/vmstorage/transport/vmselect"
+	"github.com/faceair/VictoriaTraces/lib/storage"
 	"github.com/jaegertracing/jaeger/model"
 	"github.com/jaegertracing/jaeger/storage/spanstore"
 )
 
-var rowsInserted = metrics.NewCounter(`vm_rows_inserted_total{type="importer"}`)
+var rowsInserted = metrics.NewCounter(`vm_rows_inserted_total{type="span"}`)
 
-type Store struct {
+type Store struct{}
+
+func (s *Store) GetTrace(_ context.Context, traceID model.TraceID) (*model.Trace, error) {
+	deadline := searchutils.NewDeadline(time.Now(), time.Minute, "")
+
+	results, _, err := vmselect.ProcessSearchQuery(false, &storage.SearchQuery{
+		MinTimestamp: timestampFromTime(time.Now().Add(-time.Hour * 24 * 7)),
+		MaxTimestamp: timestampFromTime(time.Now()),
+		TagFilterss: [][]storage.TagFilter{
+			{
+				{
+					Key:   nil,
+					Value: bytesutil.ToUnsafeBytes(traceID.String()),
+				},
+			},
+		},
+		Limit:     1,
+		Forward:   true,
+		FetchData: storage.FetchAll,
+	}, deadline)
+	if err != nil {
+		return nil, err
+	}
+
+	traces := make([]*model.Trace, 0)
+	err = results.RunParallel(func(rs *vmselect.Result, workerID uint) error {
+		trace := &model.Trace{
+			Spans:      make([]*model.Span, 0),
+			ProcessMap: nil,
+			Warnings:   nil,
+		}
+		for _, value := range rs.Values {
+			span := new(model.Span)
+			err = json.Unmarshal(value, span)
+			if err != nil {
+				return err
+			}
+			trace.Spans = append(trace.Spans, span)
+		}
+		traces = append(traces, trace)
+		return nil
+	})
+	return traces[0], err
 }
 
-func (s *Store) GetTrace(ctx context.Context, traceID model.TraceID) (*model.Trace, error) {
-	return nil, nil
-}
+func (s *Store) GetServices(_ context.Context) ([]string, error) {
+	deadline := searchutils.NewDeadline(time.Now(), time.Minute, "")
 
-func (s *Store) GetServices(ctx context.Context) ([]string, error) {
-	return nil, nil
+	services, _, err := vmselect.GetLabelValues(false, "service", deadline)
+	if err != nil {
+		return nil, fmt.Errorf(`cannot obtain label values for service: %w`, err)
+	}
+	return services, err
 }
 
 func (s *Store) GetOperations(_ context.Context, query spanstore.OperationQueryParameters) ([]spanstore.Operation, error) {
-	labelName := query.ServiceName
 	deadline := searchutils.NewDeadline(time.Now(), time.Minute, "")
 
-	labelValues, _, err := vmselect.GetLabelValues(false, labelName, deadline)
+	spanNames, _, err := vmselect.SearchMetricNames(false, &storage.SearchQuery{
+		MinTimestamp: timestampFromTime(time.Now().Add(-time.Hour)),
+		MaxTimestamp: timestampFromTime(time.Now()),
+		TagFilterss: [][]storage.TagFilter{
+			{
+				{
+					Key:   []byte("service"),
+					Value: []byte(query.ServiceName),
+				},
+			},
+		},
+		Limit:     1e4,
+		Forward:   true,
+		FetchData: storage.NotFetch,
+	}, deadline)
 	if err != nil {
-		return nil, fmt.Errorf(`cannot obtain label values for %q: %w`, labelName, err)
+		return nil, err
 	}
 	operations := make([]spanstore.Operation, 0)
-	for _, value := range labelValues {
-		operations = append(operations, spanstore.Operation{
-			Name: value,
-		})
+	for _, spanName := range spanNames {
+		for _, tag := range spanName.Tags {
+			if string(tag.Key) == "operation_name" {
+				operations = append(operations, spanstore.Operation{
+					Name: string(tag.Value),
+				})
+			}
+		}
 	}
 	return operations, nil
 }
 
-func (s *Store) FindTraces(ctx context.Context, query *spanstore.TraceQueryParameters) ([]*model.Trace, error) {
-	return nil, nil
+func (s *Store) FindTraces(_ context.Context, query *spanstore.TraceQueryParameters) ([]*model.Trace, error) {
+	deadline := searchutils.NewDeadline(time.Now(), time.Minute, "")
+
+	results, _, err := vmselect.ProcessSearchQuery(false, &storage.SearchQuery{
+		MinTimestamp: timestampFromTime(query.StartTimeMin),
+		MaxTimestamp: timestampFromTime(query.StartTimeMax),
+		TagFilterss: [][]storage.TagFilter{
+			{
+				{
+					Key:   []byte("service"),
+					Value: []byte(query.ServiceName),
+				},
+				{
+					Key:   []byte("operation_name"),
+					Value: []byte(query.OperationName),
+				},
+			},
+		},
+		Limit:     query.NumTraces,
+		Forward:   true,
+		FetchData: storage.FetchAll,
+	}, deadline)
+	if err != nil {
+		return nil, err
+	}
+
+	traces := make([]*model.Trace, 0)
+	err = results.RunParallel(func(rs *vmselect.Result, workerID uint) error {
+		trace := &model.Trace{
+			Spans:      make([]*model.Span, 0),
+			ProcessMap: nil,
+			Warnings:   nil,
+		}
+		for _, value := range rs.Values {
+			span := new(model.Span)
+			err = json.Unmarshal(value, span)
+			if err != nil {
+				return err
+			}
+			trace.Spans = append(trace.Spans, span)
+		}
+		traces = append(traces, trace)
+		return nil
+	})
+	return traces, err
 }
 
-func (s *Store) FindTraceIDs(ctx context.Context, query *spanstore.TraceQueryParameters) ([]model.TraceID, error) {
+func (s *Store) FindTraceIDs(_ context.Context, query *spanstore.TraceQueryParameters) ([]model.TraceID, error) {
+	deadline := searchutils.NewDeadline(time.Now(), time.Minute, "")
 
-	return nil, nil
+	spanNames, _, err := vmselect.SearchMetricNames(false, &storage.SearchQuery{
+		MinTimestamp: timestampFromTime(query.StartTimeMin),
+		MaxTimestamp: timestampFromTime(query.StartTimeMax),
+		TagFilterss: [][]storage.TagFilter{
+			{
+				{
+					Key:   []byte("service"),
+					Value: []byte(query.ServiceName),
+				},
+				{
+					Key:   []byte("operation_name"),
+					Value: []byte(query.OperationName),
+				},
+			},
+		},
+		Limit:     query.NumTraces,
+		Forward:   true,
+		FetchData: storage.NotFetch,
+	}, deadline)
+	if err != nil {
+		return nil, err
+	}
+
+	traceIDs := make([]model.TraceID, 0)
+	for _, spanName := range spanNames {
+		traceID, err := model.TraceIDFromBytes(spanName.TraceID)
+		if err != nil {
+			return nil, err
+		}
+		traceIDs = append(traceIDs, traceID)
+	}
+	return traceIDs, err
 }
 
 func (s *Store) WriteSpan(_ context.Context, span *model.Span) error {
@@ -74,7 +211,6 @@ func (s *Store) WriteSpan(_ context.Context, span *model.Span) error {
 		return err
 	}
 
-	// Assume that all the rows for a single connection belong to the same (AccountID, ProjectID).
 	rowsInserted.Add(1)
 	return nil
 }
@@ -85,4 +221,11 @@ func (s *Store) GetDependencies(ctx context.Context, endTs time.Time, lookback t
 
 func (s *Store) WriteDependencies(ts time.Time, dependencies []model.DependencyLink) error {
 	return nil
+}
+
+// timestampFromTime returns timestamp value for the given time.
+func timestampFromTime(t time.Time) int64 {
+	// There is no need in converting t to UTC, since UnixNano must
+	// return the same value for any timezone.
+	return t.UnixNano() / 1e6
 }
