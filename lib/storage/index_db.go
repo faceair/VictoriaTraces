@@ -112,7 +112,7 @@ type indexDB struct {
 
 // openIndexDB opens index db from the given path with the given caches.
 func openIndexDB(path string, metricIDCache, metricNameCache *workingsetcache.Cache) (*indexDB, error) {
-	tb, err := mergeset.OpenTable(path, invalidateTagCache, mergeTagToTraceIDsRows)
+	tb, err := mergeset.OpenTable(path, func() {}, mergeTagToTraceIDsRows)
 	if err != nil {
 		return nil, fmt.Errorf("cannot open indexDB %q: %w", path, err)
 	}
@@ -283,39 +283,6 @@ func (db *indexDB) decRef() {
 	logger.Infof("indexDB %q has been dropped", tbPath)
 }
 
-func (db *indexDB) getFromTagCache(key []byte) ([]TraceID, bool) {
-	compressedBuf := tagBufPool.Get()
-	defer tagBufPool.Put(compressedBuf)
-	compressedBuf.B = db.tagCache.GetBig(compressedBuf.B[:0], key)
-	if len(compressedBuf.B) == 0 {
-		return nil, false
-	}
-	buf := tagBufPool.Get()
-	defer tagBufPool.Put(buf)
-	var err error
-	buf.B, err = encoding.DecompressZSTD(buf.B[:0], compressedBuf.B)
-	if err != nil {
-		logger.Panicf("FATAL: cannot decompress tsids from tagCache: %s", err)
-	}
-	tsids, err := unmarshalTraceIDs(nil, buf.B)
-	if err != nil {
-		logger.Panicf("FATAL: cannot unmarshal tsids from tagCache: %s", err)
-	}
-	return tsids, true
-}
-
-var tagBufPool bytesutil.ByteBufferPool
-
-func (db *indexDB) putToTagCache(tsids []TraceID, key []byte) {
-	buf := tagBufPool.Get()
-	buf.B = marshalTSIDs(buf.B[:0], tsids)
-	compressedBuf := tagBufPool.Get()
-	compressedBuf.B = encoding.CompressZSTDLevel(compressedBuf.B[:0], buf.B, 1)
-	tagBufPool.Put(buf)
-	db.tagCache.SetBig(key, compressedBuf.B)
-	tagBufPool.Put(compressedBuf)
-}
-
 func (db *indexDB) getMetricNameFromCache(metricName []byte, metricID uint64) []byte {
 	key := (*[unsafe.Sizeof(metricID)]byte)(unsafe.Pointer(&metricID))
 	return db.metricNameCache.Get(metricName[:0], key[:])
@@ -336,69 +303,6 @@ func (db *indexDB) putMetricToCache(metricID uint64, metricName []byte) {
 	id := (*[unsafe.Sizeof(metricID)]byte)(unsafe.Pointer(&metricID))
 	db.metricNameCache.Set(id[:], metricName[:])
 	db.metricIDCache.Set(metricName[:], id[:])
-}
-
-func marshalTagFiltersKey(dst []byte, tfss []*TagFilters, tr ScanRange, versioned bool) []byte {
-	prefix := ^uint64(0)
-	if versioned {
-		prefix = atomic.LoadUint64(&tagFiltersKeyGen)
-	}
-	// Round start and end times to per-day granularity according to per-day inverted index.
-	startDate := uint64(tr.MinTimestamp) / msecPerDay
-	endDate := uint64(tr.MaxTimestamp) / msecPerDay
-	dst = encoding.MarshalUint64(dst, prefix)
-	dst = encoding.MarshalUint64(dst, startDate)
-	dst = encoding.MarshalUint64(dst, endDate)
-	if len(tfss) == 0 {
-		return dst
-	}
-	for _, tfs := range tfss {
-		dst = append(dst, 0) // separator between tfs groups.
-		for i := range tfs.tfs {
-			dst = tfs.tfs[i].Marshal(dst)
-		}
-	}
-	return dst
-}
-
-func invalidateTagCache() {
-	// This function must be fast, since it is called each
-	// time new timeseries is added.
-	atomic.AddUint64(&tagFiltersKeyGen, 1)
-}
-
-var tagFiltersKeyGen uint64
-
-func marshalTSIDs(dst []byte, traceIDS []TraceID) []byte {
-	dst = encoding.MarshalUint64(dst, uint64(len(traceIDS)))
-	for i := range traceIDS {
-		dst = traceIDS[i].Marshal(dst)
-	}
-	return dst
-}
-
-func unmarshalTraceIDs(dst []TraceID, src []byte) ([]TraceID, error) {
-	if len(src) < 8 {
-		return dst, fmt.Errorf("cannot unmarshal the number of tsids from %d bytes; require at least %d bytes", len(src), 8)
-	}
-	n := encoding.UnmarshalUint64(src)
-	src = src[8:]
-	dstLen := len(dst)
-	if nn := dstLen + int(n) - cap(dst); nn > 0 {
-		dst = append(dst[:cap(dst)], make([]TraceID, nn)...)
-	}
-	dst = dst[:dstLen+int(n)]
-	for i := 0; i < int(n); i++ {
-		tail, err := dst[dstLen+i].Unmarshal(src)
-		if err != nil {
-			return dst, fmt.Errorf("cannot unmarshal tsid #%d out of %d: %w", i, n, err)
-		}
-		src = tail
-	}
-	if len(src) > 0 {
-		return dst, fmt.Errorf("non-zero tail left after unmarshaling %d tsids; len(tail)=%d", n, len(src))
-	}
-	return dst, nil
 }
 
 type indexSearch struct {
@@ -678,16 +582,6 @@ func (db *indexDB) searchTraceIDs(tfss []*TagFilters, tr ScanRange, deadline uin
 		return nil, nil
 	}
 
-	tfKeyBuf := tagFiltersKeyBufPool.Get()
-	defer tagFiltersKeyBufPool.Put(tfKeyBuf)
-
-	tfKeyBuf.B = marshalTagFiltersKey(tfKeyBuf.B[:0], tfss, tr, true)
-	tsids, ok := db.getFromTagCache(tfKeyBuf.B)
-	if ok {
-		// Fast path - tsids found in the cache.
-		return tsids, nil
-	}
-
 	// Slow path - search for tsids in the db and extDB.
 	is := db.getIndexSearch(deadline)
 	localTSIDs, err := is.searchTraceIDs(tfss, tr)
@@ -698,42 +592,26 @@ func (db *indexDB) searchTraceIDs(tfss []*TagFilters, tr ScanRange, deadline uin
 
 	var extTSIDs []TraceID
 	if db.doExtDB(func(extDB *indexDB) {
-		tfKeyExtBuf := tagFiltersKeyBufPool.Get()
-		defer tagFiltersKeyBufPool.Put(tfKeyExtBuf)
 
-		// Data in extDB cannot be changed, so use unversioned keys for tag cache.
-		tfKeyExtBuf.B = marshalTagFiltersKey(tfKeyExtBuf.B[:0], tfss, tr, false)
-		tsids, ok := extDB.getFromTagCache(tfKeyExtBuf.B)
-		if ok {
-			extTSIDs = tsids
-			return
-		}
 		is := extDB.getIndexSearch(deadline)
 		extTSIDs, err = is.searchTraceIDs(tfss, tr)
 		extDB.putIndexSearch(is)
 
 		sort.Slice(extTSIDs, func(i, j int) bool { return extTSIDs[i].Less(extTSIDs[j]) })
-		extDB.putToTagCache(extTSIDs, tfKeyExtBuf.B)
 	}) {
 		if err != nil {
 			return nil, err
 		}
 	}
-
 	// Merge localTSIDs with extTSIDs.
-	tsids = mergeTSIDs(localTSIDs, extTSIDs)
+	tsids := mergeTSIDs(localTSIDs, extTSIDs)
 
 	// Sort the found tsids, since they must be passed to TraceID search
 	// in the sorted order.
 	sort.Slice(tsids, func(i, j int) bool { return tsids[i].Less(tsids[j]) })
 
-	// Store TSIDs in the cache.
-	db.putToTagCache(tsids, tfKeyBuf.B)
-
 	return tsids, err
 }
-
-var tagFiltersKeyBufPool bytesutil.ByteBufferPool
 
 func mergeTSIDs(a, b []TraceID) []TraceID {
 	if len(b) > len(a) {

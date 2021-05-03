@@ -188,7 +188,7 @@ func (tf *tagFilter) Less(other *tagFilter) bool {
 	if len(tf.orSuffixes) != len(other.orSuffixes) {
 		return len(tf.orSuffixes) < len(other.orSuffixes)
 	}
-	return bytes.Compare(tf.prefix, other.prefix) < 0
+	return string(tf.prefix) < string(other.prefix)
 }
 
 // String returns human-readable tf value.

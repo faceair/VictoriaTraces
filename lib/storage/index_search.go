@@ -477,7 +477,7 @@ func (is *indexSearch) updateTraceIDsByPrefixRange(traceIDs *uint128.Set, startP
 		}
 		loopsPaceLimiter++
 		item := ts.Item
-		if bytes.Compare(item, endPrefix) == 1 {
+		if string(item) > string(endPrefix) {
 			return nil
 		}
 		if err := mp.InitOnlyTail(item, item[len(startPrefix):]); err != nil {
