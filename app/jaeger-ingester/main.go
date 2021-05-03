@@ -15,10 +15,12 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/protoparser/common"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/writeconcurrencylimiter"
 	"github.com/VictoriaMetrics/metrics"
-	"github.com/faceair/VictoriaTraces/app/jaeger-ingester/grpc"
+	"github.com/faceair/VictoriaTraces/app/jaeger-ingester/store"
 	"github.com/faceair/VictoriaTraces/app/vmstorage/transport/vminsert"
 	"github.com/faceair/VictoriaTraces/app/vmstorage/transport/vmselect"
 	"github.com/faceair/VictoriaTraces/lib/storage"
+	"github.com/jaegertracing/jaeger/plugin/storage/grpc"
+	"github.com/jaegertracing/jaeger/plugin/storage/grpc/shared"
 )
 
 var (
@@ -46,7 +48,7 @@ func main() {
 	storage.SetMaxLabelsPerTimeseries(*maxLabelsPerTimeseries)
 	writeconcurrencylimiter.Init()
 
-	grpc.MustStart()
+	grpc.Serve(&shared.PluginServices{Store: new(store.Store)})
 
 	sig := procutil.WaitForSigterm()
 	logger.Infof("service received signal %s", sig)
