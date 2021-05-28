@@ -27,9 +27,9 @@ const (
 	nsPrefixMetricIDToMetricName = 0
 	nsPrefixMetricNameToMetricID = 1
 
-	nsPrefixTagKeyValue = 2
-	// Prefix for (Tag,Time)->TraceID entries.
+	nsPrefixTagKeyValue      = 2
 	nsPrefixTagTimeToTraceID = 3
+	nsPrefixTraceIDToTag     = 4
 )
 
 func shouldCacheBlock(item []byte) bool {
