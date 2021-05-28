@@ -505,6 +505,20 @@ func (ctx *vmselectRequestCtx) readUint64() (uint64, error) {
 	return n, nil
 }
 
+func (ctx *vmselectRequestCtx) readSearchQuery() error {
+	if err := ctx.readDataBufBytes(maxSearchQuerySize); err != nil {
+		return fmt.Errorf("cannot read searchQuery: %w", err)
+	}
+	tail, err := ctx.sq.Unmarshal(ctx.dataBuf)
+	if err != nil {
+		return fmt.Errorf("cannot unmarshal SearchQuery: %w", err)
+	}
+	if len(tail) > 0 {
+		return fmt.Errorf("unexpected non-zero tail left after unmarshaling SearchQuery: (len=%d) %q", len(tail), tail)
+	}
+	return nil
+}
+
 func (ctx *vmselectRequestCtx) readDataBufBytes(maxDataSize int) error {
 	ctx.sizeBuf = bytesutil.Resize(ctx.sizeBuf, 8)
 	if _, err := io.ReadFull(ctx.bc, ctx.sizeBuf); err != nil {
@@ -617,13 +631,15 @@ func (s *Server) processVMSelectRequest(ctx *vmselectRequestCtx) error {
 	ctx.deadline = fasttime.UnixTimestamp() + uint64(timeout)
 
 	switch rpcName {
-	case "search_v5":
+	case "search_v1":
 		return s.processVMSelectSearchQuery(ctx)
-	case "labelValues_v2":
+	case "searchTraceIDs_v1":
+		return s.processVMSelectSearchTraceIDs(ctx)
+	case "labelValues_v1":
 		return s.processVMSelectLabelValues(ctx)
-	case "labelEntries_v2":
+	case "labelEntries_v1":
 		return s.processVMSelectLabelEntries(ctx)
-	case "labels_v2":
+	case "labels_v1":
 		return s.processVMSelectLabels(ctx)
 	default:
 		return fmt.Errorf("unsupported rpcName: %q", ctx.dataBuf)
@@ -747,22 +763,16 @@ const maxSearchQuerySize = 1024 * 1024
 func (s *Server) processVMSelectSearchQuery(ctx *vmselectRequestCtx) error {
 	vmselectSearchQueryRequests.Inc()
 
-	// Read search query.
-	if err := ctx.readDataBufBytes(maxSearchQuerySize); err != nil {
-		return fmt.Errorf("cannot read searchQuery: %w", err)
-	}
-	tail, err := ctx.sq.Unmarshal(ctx.dataBuf)
-	if err != nil {
-		return fmt.Errorf("cannot unmarshal SearchQuery: %w", err)
-	}
-	if len(tail) > 0 {
-		return fmt.Errorf("unexpected non-zero tail left after unmarshaling SearchQuery: (len=%d) %q", len(tail), tail)
+	// Read request.
+	if err := ctx.readSearchQuery(); err != nil {
+		return err
 	}
 
 	// Setup search.
 	if err := ctx.setupTfss(); err != nil {
 		return ctx.writeErrorMessage(err)
 	}
+
 	tr := storage.ScanRange{
 		MinTimestamp: ctx.sq.MinTimestamp,
 		MaxTimestamp: ctx.sq.MaxTimestamp,
@@ -805,6 +815,46 @@ func (s *Server) processVMSelectSearchQuery(ctx *vmselectRequestCtx) error {
 	return nil
 }
 
+func (s *Server) processVMSelectSearchTraceIDs(ctx *vmselectRequestCtx) error {
+	vmselectSearchMetricNamesRequests.Inc()
+
+	// Read request.
+	if err := ctx.readSearchQuery(); err != nil {
+		return err
+	}
+
+	// Search metric names.
+	tr := storage.ScanRange{
+		MinTimestamp: ctx.sq.MinTimestamp,
+		MaxTimestamp: ctx.sq.MaxTimestamp,
+	}
+	if err := ctx.setupTfss(); err != nil {
+		return ctx.writeErrorMessage(err)
+	}
+	mns, err := s.storage.SearchTraceIDs(ctx.tfss, tr, ctx.deadline)
+	if err != nil {
+		return ctx.writeErrorMessage(err)
+	}
+
+	// Send empty error message to vmselect.
+	if err := ctx.writeString(""); err != nil {
+		return fmt.Errorf("cannot send empty error message: %w", err)
+	}
+
+	// Send response.
+	traceIDsCount := len(mns)
+	if err := ctx.writeUint64(uint64(traceIDsCount)); err != nil {
+		return fmt.Errorf("cannot send traceIDsCount: %w", err)
+	}
+	for i, mn := range mns {
+		ctx.dataBuf = mn.Marshal(ctx.dataBuf[:0])
+		if err := ctx.writeDataBufBytes(); err != nil {
+			return fmt.Errorf("cannot send metricName #%d: %w", i+1, err)
+		}
+	}
+	return nil
+}
+
 // checkTimeRange returns true if the given tr is denied for querying.
 func checkTimeRange(s *storage.Storage, tr storage.ScanRange) error {
 	if !*denyQueriesOutsideRetention {
@@ -822,12 +872,13 @@ func checkTimeRange(s *storage.Storage, tr storage.ScanRange) error {
 }
 
 var (
-	vmselectLabelsRequests       = metrics.NewCounter("vm_vmselect_labels_requests_total")
-	vmselectLabelValuesRequests  = metrics.NewCounter("vm_vmselect_label_values_requests_total")
-	vmselectLabelEntriesRequests = metrics.NewCounter("vm_vmselect_label_entries_requests_total")
-	vmselectSearchQueryRequests  = metrics.NewCounter("vm_vmselect_search_query_requests_total")
-	vmselectMetricBlocksRead     = metrics.NewCounter("vm_vmselect_metric_blocks_read_total")
-	vmselectMetricRowsRead       = metrics.NewCounter("vm_vmselect_metric_rows_read_total")
+	vmselectLabelsRequests            = metrics.NewCounter("vm_vmselect_labels_requests_total")
+	vmselectLabelValuesRequests       = metrics.NewCounter("vm_vmselect_label_values_requests_total")
+	vmselectLabelEntriesRequests      = metrics.NewCounter("vm_vmselect_label_entries_requests_total")
+	vmselectSearchQueryRequests       = metrics.NewCounter("vm_vmselect_search_query_requests_total")
+	vmselectSearchMetricNamesRequests = metrics.NewCounter(`vm_vmselect_rpc_requests_total{name="search_metric_names"}`)
+	vmselectMetricBlocksRead          = metrics.NewCounter("vm_vmselect_metric_blocks_read_total")
+	vmselectMetricRowsRead            = metrics.NewCounter("vm_vmselect_metric_rows_read_total")
 )
 
 func (ctx *vmselectRequestCtx) setupTfss() error {

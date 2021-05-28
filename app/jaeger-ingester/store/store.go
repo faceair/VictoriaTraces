@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/app/vmselect/searchutils"
@@ -13,12 +14,29 @@ import (
 	"github.com/faceair/VictoriaTraces/app/vmstorage/transport/vmselect"
 	"github.com/faceair/VictoriaTraces/lib/storage"
 	"github.com/jaegertracing/jaeger/model"
+	"github.com/jaegertracing/jaeger/storage/dependencystore"
 	"github.com/jaegertracing/jaeger/storage/spanstore"
 )
 
 var rowsInserted = metrics.NewCounter(`vm_rows_inserted_total{type="span"}`)
 
+func NewStore() *Store {
+	return new(Store)
+}
+
 type Store struct{}
+
+func (s *Store) DependencyReader() dependencystore.Reader {
+	return s
+}
+
+func (s *Store) SpanReader() spanstore.Reader {
+	return s
+}
+
+func (s *Store) SpanWriter() spanstore.Writer {
+	return s
+}
 
 func (s *Store) GetTrace(_ context.Context, traceID model.TraceID) (*model.Trace, error) {
 	deadline := searchutils.NewDeadline(time.Now(), time.Minute, "")
@@ -76,7 +94,7 @@ func (s *Store) GetServices(_ context.Context) ([]string, error) {
 func (s *Store) GetOperations(_ context.Context, query spanstore.OperationQueryParameters) ([]spanstore.Operation, error) {
 	deadline := searchutils.NewDeadline(time.Now(), time.Minute, "")
 
-	spanNames, _, err := vmselect.SearchMetricNames(false, &storage.SearchQuery{
+	results, _, err := vmselect.ProcessSearchQuery(false, &storage.SearchQuery{
 		MinTimestamp: timestampFromTime(time.Now().Add(-time.Hour)),
 		MaxTimestamp: timestampFromTime(time.Now()),
 		TagFilterss: [][]storage.TagFilter{
@@ -94,16 +112,28 @@ func (s *Store) GetOperations(_ context.Context, query spanstore.OperationQueryP
 	if err != nil {
 		return nil, err
 	}
+
+	var rsLock sync.Mutex
 	operations := make([]spanstore.Operation, 0)
-	for _, spanName := range spanNames {
-		for _, tag := range spanName.Tags {
-			if string(tag.Key) == "operation_name" {
-				operations = append(operations, spanstore.Operation{
-					Name: string(tag.Value),
-				})
+	err = results.RunParallel(func(rs *vmselect.Result, workerID uint) error {
+		for _, value := range rs.Values {
+			span := new(model.Span)
+			err = json.Unmarshal(value, span)
+			if err != nil {
+				return err
+			}
+			for _, tag := range span.Tags {
+				if string(tag.Key) == "operation_name" {
+					rsLock.Lock()
+					operations = append(operations, spanstore.Operation{
+						Name: tag.VStr,
+					})
+					rsLock.Unlock()
+				}
 			}
 		}
-	}
+		return nil
+	})
 	return operations, nil
 }
 
@@ -133,6 +163,7 @@ func (s *Store) FindTraces(_ context.Context, query *spanstore.TraceQueryParamet
 		return nil, err
 	}
 
+	var rsLock sync.Mutex
 	traces := make([]*model.Trace, 0)
 	err = results.RunParallel(func(rs *vmselect.Result, workerID uint) error {
 		trace := &model.Trace{
@@ -148,7 +179,9 @@ func (s *Store) FindTraces(_ context.Context, query *spanstore.TraceQueryParamet
 			}
 			trace.Spans = append(trace.Spans, span)
 		}
+		rsLock.Lock()
 		traces = append(traces, trace)
+		rsLock.Unlock()
 		return nil
 	})
 	return traces, err
@@ -157,7 +190,7 @@ func (s *Store) FindTraces(_ context.Context, query *spanstore.TraceQueryParamet
 func (s *Store) FindTraceIDs(_ context.Context, query *spanstore.TraceQueryParameters) ([]model.TraceID, error) {
 	deadline := searchutils.NewDeadline(time.Now(), time.Minute, "")
 
-	spanNames, _, err := vmselect.SearchMetricNames(false, &storage.SearchQuery{
+	results, _, err := vmselect.SearchTraceIDs(false, &storage.SearchQuery{
 		MinTimestamp: timestampFromTime(query.StartTimeMin),
 		MaxTimestamp: timestampFromTime(query.StartTimeMax),
 		TagFilterss: [][]storage.TagFilter{
@@ -181,12 +214,8 @@ func (s *Store) FindTraceIDs(_ context.Context, query *spanstore.TraceQueryParam
 	}
 
 	traceIDs := make([]model.TraceID, 0)
-	for _, spanName := range spanNames {
-		traceID, err := model.TraceIDFromBytes(spanName.TraceID)
-		if err != nil {
-			return nil, err
-		}
-		traceIDs = append(traceIDs, traceID)
+	for _, result := range results {
+		traceIDs = append(traceIDs, model.TraceID{Low: result.Lo, High: result.Hi})
 	}
 	return traceIDs, err
 }
@@ -194,6 +223,7 @@ func (s *Store) FindTraceIDs(_ context.Context, query *spanstore.TraceQueryParam
 func (s *Store) WriteSpan(_ context.Context, span *model.Span) error {
 	ctx := vminsert.GetInsertCtx()
 	defer vminsert.PutInsertCtx(ctx)
+	ctx.Reset()
 
 	ctx.Labels = ctx.Labels[:0]
 

@@ -46,9 +46,10 @@ func main() {
 	logger.Infof("successfully initialized netstorage in %.3f seconds", time.Since(startTime).Seconds())
 
 	storage.SetMaxLabelsPerTimeseries(*maxLabelsPerTimeseries)
+	common.StartUnmarshalWorkers()
 	writeconcurrencylimiter.Init()
 
-	grpc.Serve(&shared.PluginServices{Store: new(store.Store)})
+	grpc.Serve(&shared.PluginServices{Store: store.NewStore()})
 
 	sig := procutil.WaitForSigterm()
 	logger.Infof("service received signal %s", sig)

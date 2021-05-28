@@ -62,29 +62,29 @@ func (s *Set) SizeBytes() uint64 {
 
 func (s *Set) Add(x Uint128) {
 	bs := s.buckets
-	if len(bs) > 0 && bs[0].hi == x.hi {
+	if len(bs) > 0 && bs[0].hi == x.Hi {
 		// Manually inline bucket32.add for performance reasons.
 		b64 := bs[0]
 		b64Len := b64.set.Len()
-		b64.set.Add(x.lo)
+		b64.set.Add(x.Lo)
 		s.itemsCount += b64.set.Len() - b64Len
 		return
 	}
 	for i := range bs {
 		b64 := &bs[i]
-		if b64.hi == x.hi {
+		if b64.hi == x.Hi {
 			b64Len := b64.set.Len()
-			b64.set.Add(x.lo)
+			b64.set.Add(x.Lo)
 			s.itemsCount += b64.set.Len() - b64Len
 			return
 		}
 	}
 	b64 := s.addBucket64()
-	b64.hi = x.hi
+	b64.hi = x.Hi
 	b64.set = &uint64set.Set{}
 
 	b64Len := b64.set.Len()
-	b64.set.Add(x.lo)
+	b64.set.Add(x.Lo)
 	s.itemsCount += b64.set.Len() - b64Len
 }
 
@@ -95,8 +95,8 @@ func (s *Set) Has(x Uint128) bool {
 	bs := s.buckets
 	for i := range bs {
 		b64 := &bs[i]
-		if b64.hi == x.hi {
-			return b64.set.Has(x.lo)
+		if b64.hi == x.Hi {
+			return b64.set.Has(x.Lo)
 		}
 	}
 	return false
@@ -105,18 +105,18 @@ func (s *Set) Has(x Uint128) bool {
 // Del deletes x from s.
 func (s *Set) Del(x Uint128) {
 	bs := s.buckets
-	if len(bs) > 0 && bs[0].hi == x.hi {
+	if len(bs) > 0 && bs[0].hi == x.Hi {
 		b64 := bs[0]
 		b64Len := b64.set.Len()
-		b64.set.Del(x.lo)
+		b64.set.Del(x.Lo)
 		s.itemsCount -= b64Len - b64.set.Len()
 		return
 	}
 	for i := range bs {
 		b64 := &bs[i]
-		if b64.hi == x.hi {
+		if b64.hi == x.Hi {
 			b64Len := b64.set.Len()
-			b64.set.Del(x.lo)
+			b64.set.Del(x.Lo)
 			s.itemsCount -= b64Len - b64.set.Len()
 			return
 		}
@@ -180,8 +180,8 @@ func (s *Set) ForEach(f func(part []Uint128) bool) {
 			b128s := make([]Uint128, 0, len(part))
 			for _, lo := range part {
 				b128s = append(b128s, Uint128{
-					lo: lo,
-					hi: hi,
+					Lo: lo,
+					Hi: hi,
 				})
 			}
 			isContinue = f(b128s)
@@ -198,9 +198,9 @@ func (s *Set) AddMulti(a []Uint128) {
 		return
 	}
 	slowPath := false
-	hi := a[0].hi
+	hi := a[0].Hi
 	for _, x := range a[1:] {
-		if hi != x.hi {
+		if hi != x.Hi {
 			slowPath = true
 			break
 		}
@@ -227,7 +227,7 @@ func (s *Set) AddMulti(a []Uint128) {
 	}
 	los := getU64s()
 	for i := range a {
-		los = append(los, a[i].lo)
+		los = append(los, a[i].Lo)
 	}
 	b64Len := b64.set.Len()
 	b64.set.AddMulti(los)
@@ -391,7 +391,7 @@ func (s *Set) AppendTo(dst []Uint128) []Uint128 {
 	for i := range s.buckets {
 		los = s.buckets[i].set.AppendTo(los[:0])
 		for j := range los {
-			dst = append(dst, Uint128{hi: s.buckets[i].hi, lo: los[j]})
+			dst = append(dst, Uint128{Hi: s.buckets[i].hi, Lo: los[j]})
 		}
 	}
 	putU64s(los)

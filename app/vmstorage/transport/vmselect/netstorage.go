@@ -876,8 +876,7 @@ func (tbfw *tmpBlocksFileWrapper) RegisterAndWriteBlock(mb *storage.Block) error
 	return err
 }
 
-// SearchMetricNames returns all the metric names matching sq until the given deadline.
-func SearchMetricNames(denyPartialResponse bool, sq *storage.SearchQuery, deadline searchutils.Deadline) ([]storage.SpanName, bool, error) {
+func SearchTraceIDs(denyPartialResponse bool, sq *storage.SearchQuery, deadline searchutils.Deadline) ([]storage.TraceID, bool, error) {
 	if deadline.Exceeded() {
 		return nil, false, fmt.Errorf("timeout exceeded before starting to search metric names: %s", deadline.String())
 	}
@@ -886,49 +885,36 @@ func SearchMetricNames(denyPartialResponse bool, sq *storage.SearchQuery, deadli
 
 	// Send the query to all the storage nodes in parallel.
 	type nodeResult struct {
-		metricNames [][]byte
-		err         error
+		traceIDs []storage.TraceID
+		err      error
 	}
 	snr := startStorageNodesRequest(denyPartialResponse, func(idx int, sn *storageNode) interface{} {
 		sn.searchMetricNamesRequests.Inc()
-		metricNames, err := sn.processSearchMetricNames(requestData, deadline)
+		traceIDs, err := sn.processSearchTraceIDs(requestData, deadline)
 		if err != nil {
 			sn.searchMetricNamesErrors.Inc()
 			err = fmt.Errorf("cannot search metric names on vmstorage %s: %w", sn.connPool.Addr(), err)
 		}
 		return &nodeResult{
-			metricNames: metricNames,
-			err:         err,
+			traceIDs: traceIDs,
+			err:      err,
 		}
 	})
 
 	// Collect results.
-	metricNames := make(map[string]struct{})
+	traceIDs := make([]storage.TraceID, 0)
 	isPartial, err := snr.collectResults(partialSearchMetricNamesResults, func(result interface{}) error {
 		nr := result.(*nodeResult)
 		if nr.err != nil {
 			return nr.err
 		}
-		for _, metricName := range nr.metricNames {
-			metricNames[string(metricName)] = struct{}{}
-		}
+		traceIDs = append(traceIDs, nr.traceIDs...)
 		return nil
 	})
 	if err != nil {
 		return nil, isPartial, fmt.Errorf("cannot fetch metric names from vmstorage nodes: %w", err)
 	}
-
-	// Unmarshal metricNames
-	mns := make([]storage.SpanName, len(metricNames))
-	i := 0
-	for metricName := range metricNames {
-		mn := &mns[i]
-		if err := mn.Unmarshal(bytesutil.ToUnsafeBytes(metricName)); err != nil {
-			return nil, false, fmt.Errorf("cannot unmarshal metric name obtained from vmstorage: %w; metricName=%q", err, metricName)
-		}
-		i++
-	}
-	return mns, isPartial, nil
+	return traceIDs, isPartial, nil
 }
 
 // ProcessSearchQuery performs sq until the given deadline.
@@ -1249,10 +1235,10 @@ func (sn *storageNode) getLabels(deadline searchutils.Deadline) ([]string, error
 		labels = ls
 		return nil
 	}
-	if err := sn.execOnConn("labels_v2", f, deadline); err != nil {
+	if err := sn.execOnConn("labels_v1", f, deadline); err != nil {
 		// Try again before giving up.
 		labels = nil
-		if err = sn.execOnConn("labels_v2", f, deadline); err != nil {
+		if err = sn.execOnConn("labels_v1", f, deadline); err != nil {
 			return nil, err
 		}
 	}
@@ -1289,10 +1275,10 @@ func (sn *storageNode) getLabelValues(labelName string, deadline searchutils.Dea
 		labelValues = lvs
 		return nil
 	}
-	if err := sn.execOnConn("labelValues_v2", f, deadline); err != nil {
+	if err := sn.execOnConn("labelValues_v1", f, deadline); err != nil {
 		// Try again before giving up.
 		labelValues = nil
-		if err = sn.execOnConn("labelValues_v2", f, deadline); err != nil {
+		if err = sn.execOnConn("labelValues_v1", f, deadline); err != nil {
 			return nil, err
 		}
 	}
@@ -1329,10 +1315,10 @@ func (sn *storageNode) getLabelEntries(deadline searchutils.Deadline) ([]storage
 		tagEntries = tes
 		return nil
 	}
-	if err := sn.execOnConn("labelEntries_v2", f, deadline); err != nil {
+	if err := sn.execOnConn("labelEntries_v1", f, deadline); err != nil {
 		// Try again before giving up.
 		tagEntries = nil
-		if err = sn.execOnConn("labelEntries_v2", f, deadline); err != nil {
+		if err = sn.execOnConn("labelEntries_v1", f, deadline); err != nil {
 			return nil, err
 		}
 	}
@@ -1359,23 +1345,23 @@ func (sn *storageNode) getSeriesCount(deadline searchutils.Deadline) (uint64, er
 	return n, nil
 }
 
-func (sn *storageNode) processSearchMetricNames(requestData []byte, deadline searchutils.Deadline) ([][]byte, error) {
-	var metricNames [][]byte
+func (sn *storageNode) processSearchTraceIDs(requestData []byte, deadline searchutils.Deadline) ([]storage.TraceID, error) {
+	var traceIDs []storage.TraceID
 	f := func(bc *handshake.BufferedConn) error {
-		mns, err := sn.processSearchMetricNamesOnConn(bc, requestData)
+		mns, err := sn.processSearchTraceIDsOnConn(bc, requestData)
 		if err != nil {
 			return err
 		}
-		metricNames = mns
+		traceIDs = mns
 		return nil
 	}
-	if err := sn.execOnConn("searchMetricNames_v1", f, deadline); err != nil {
+	if err := sn.execOnConn("searchTraceIDs_v1", f, deadline); err != nil {
 		// Try again before giving up.
-		if err = sn.execOnConn("searchMetricNames_v1", f, deadline); err != nil {
+		if err = sn.execOnConn("searchTraceIDs_v1", f, deadline); err != nil {
 			return nil, err
 		}
 	}
-	return metricNames, nil
+	return traceIDs, nil
 }
 
 func (sn *storageNode) processSearchQuery(requestData []byte, processBlock func(mb *storage.Block) error, deadline searchutils.Deadline) error {
@@ -1388,9 +1374,9 @@ func (sn *storageNode) processSearchQuery(requestData []byte, processBlock func(
 		blocksRead = n
 		return nil
 	}
-	if err := sn.execOnConn("search_v4", f, deadline); err != nil && blocksRead == 0 {
+	if err := sn.execOnConn("search_v1", f, deadline); err != nil && blocksRead == 0 {
 		// Try again before giving up if zero blocks read on the previous attempt.
-		if err = sn.execOnConn("search_v4", f, deadline); err != nil {
+		if err = sn.execOnConn("search_v1", f, deadline); err != nil {
 			return err
 		}
 	}
@@ -1798,7 +1784,7 @@ const maxMetricBlockSize = 1024 * 1024
 // from vmstorage.
 const maxErrorMessageSize = 64 * 1024
 
-func (sn *storageNode) processSearchMetricNamesOnConn(bc *handshake.BufferedConn, requestData []byte) ([][]byte, error) {
+func (sn *storageNode) processSearchTraceIDsOnConn(bc *handshake.BufferedConn, requestData []byte) ([]storage.TraceID, error) {
 	// Send the requst to sn.
 	if err := writeBytes(bc, requestData); err != nil {
 		return nil, fmt.Errorf("cannot write requestData: %w", err)
@@ -1817,22 +1803,27 @@ func (sn *storageNode) processSearchMetricNamesOnConn(bc *handshake.BufferedConn
 	}
 
 	// Read metricNames from response.
-	metricNamesCount, err := readUint64(bc)
+	traceIDsCount, err := readUint64(bc)
 	if err != nil {
 		return nil, fmt.Errorf("cannot read metricNamesCount: %w", err)
 	}
-	metricNames := make([][]byte, metricNamesCount)
-	for i := int64(0); i < int64(metricNamesCount); i++ {
-		buf, err = readBytes(buf[:0], bc, maxMetricNameSize)
+	traceIDs := make([]storage.TraceID, traceIDsCount)
+	for i := int64(0); i < int64(traceIDsCount); i++ {
+		buf, err = readBytes(buf[:0], bc, maxTraceIDSize)
 		if err != nil {
-			return nil, fmt.Errorf("cannot read metricName #%d: %w", i+1, err)
+			return nil, fmt.Errorf("cannot read traceID #%d: %w", i+1, err)
 		}
-		metricNames[i] = append(metricNames[i][:0], buf...)
+		traceID, _, err := storage.UnmarshalTraceID(buf)
+		if err != nil {
+			return nil, fmt.Errorf("cannot read traceID #%d: %w", i+1, err)
+		}
+
+		traceIDs = append(traceIDs, traceID)
 	}
-	return metricNames, nil
+	return traceIDs, nil
 }
 
-const maxMetricNameSize = 64 * 1024
+const maxTraceIDSize = 256
 
 func (sn *storageNode) processSearchQueryOnConn(bc *handshake.BufferedConn, requestData []byte, processBlock func(mb *storage.Block) error) (int, error) {
 	// Send the request to sn.

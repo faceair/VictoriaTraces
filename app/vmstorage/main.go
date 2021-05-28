@@ -270,16 +270,16 @@ func registerStorageMetrics(strg *storage.Storage) {
 	})
 
 	metrics.NewGauge(`vm_concurrent_search_tsids_limit_reached_total`, func() float64 {
-		return float64(m().SearchTSIDsConcurrencyLimitReached)
+		return float64(m().SearchTraceIDsConcurrencyLimitReached)
 	})
 	metrics.NewGauge(`vm_concurrent_search_tsids_limit_timeout_total`, func() float64 {
-		return float64(m().SearchTSIDsConcurrencyLimitTimeout)
+		return float64(m().SearchTraceIDsConcurrencyLimitTimeout)
 	})
 	metrics.NewGauge(`vm_concurrent_search_tsids_capacity`, func() float64 {
-		return float64(m().SearchTSIDsConcurrencyCapacity)
+		return float64(m().SearchTraceIDsConcurrencyCapacity)
 	})
 	metrics.NewGauge(`vm_concurrent_search_tsids_current`, func() float64 {
-		return float64(m().SearchTSIDsConcurrencyCurrent)
+		return float64(m().SearchTraceIDsConcurrencyCurrent)
 	})
 
 	metrics.NewGauge(`vm_search_delays_total`, func() float64 {

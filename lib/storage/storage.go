@@ -43,8 +43,8 @@ type Storage struct {
 	addRowsConcurrencyLimitTimeout uint64
 	addRowsConcurrencyDroppedRows  uint64
 
-	searchTSIDsConcurrencyLimitReached uint64
-	searchTSIDsConcurrencyLimitTimeout uint64
+	searchTraceIDsConcurrencyLimitReached uint64
+	searchTraceIDsConcurrencyLimitTimeout uint64
 
 	slowRowInserts         uint64
 	slowPerDayIndexInserts uint64
@@ -177,10 +177,10 @@ type Metrics struct {
 	AddRowsConcurrencyCapacity     uint64
 	AddRowsConcurrencyCurrent      uint64
 
-	SearchTSIDsConcurrencyLimitReached uint64
-	SearchTSIDsConcurrencyLimitTimeout uint64
-	SearchTSIDsConcurrencyCapacity     uint64
-	SearchTSIDsConcurrencyCurrent      uint64
+	SearchTraceIDsConcurrencyLimitReached uint64
+	SearchTraceIDsConcurrencyLimitTimeout uint64
+	SearchTraceIDsConcurrencyCapacity     uint64
+	SearchTraceIDsConcurrencyCurrent      uint64
 
 	SearchDelays uint64
 
@@ -222,10 +222,10 @@ func (s *Storage) UpdateMetrics(m *Metrics) {
 	m.AddRowsConcurrencyCapacity = uint64(cap(addRowsConcurrencyCh))
 	m.AddRowsConcurrencyCurrent = uint64(len(addRowsConcurrencyCh))
 
-	m.SearchTSIDsConcurrencyLimitReached += atomic.LoadUint64(&s.searchTSIDsConcurrencyLimitReached)
-	m.SearchTSIDsConcurrencyLimitTimeout += atomic.LoadUint64(&s.searchTSIDsConcurrencyLimitTimeout)
-	m.SearchTSIDsConcurrencyCapacity = uint64(cap(searchTSIDsConcurrencyCh))
-	m.SearchTSIDsConcurrencyCurrent = uint64(len(searchTSIDsConcurrencyCh))
+	m.SearchTraceIDsConcurrencyLimitReached += atomic.LoadUint64(&s.searchTraceIDsConcurrencyLimitReached)
+	m.SearchTraceIDsConcurrencyLimitTimeout += atomic.LoadUint64(&s.searchTraceIDsConcurrencyLimitTimeout)
+	m.SearchTraceIDsConcurrencyCapacity = uint64(cap(searchTraceIDsConcurrencyCh))
+	m.SearchTraceIDsConcurrencyCurrent = uint64(len(searchTraceIDsConcurrencyCh))
 
 	m.SearchDelays = storagepacelimiter.Search.DelaysTotal()
 
@@ -494,19 +494,19 @@ func nextRetentionDuration(retentionMonths int) time.Duration {
 	return deadline.Sub(t)
 }
 
-// searchTraceIDs returns sorted TSIDs for the given tfss and the given tr.
-func (s *Storage) searchTraceIDs(tfss []*TagFilters, tr ScanRange, deadline uint64) ([]TraceID, error) {
-	// Do not cache tfss -> tsids here, since the caching is performed
+// SearchTraceIDs returns sorted TraceIDs for the given tfss and the given tr.
+func (s *Storage) SearchTraceIDs(tfss []*TagFilters, tr ScanRange, deadline uint64) ([]TraceID, error) {
+	// Do not cache tfss -> traceIDs here, since the caching is performed
 	// on idb level.
 
-	// Limit the number of concurrent goroutines that may search TSIDS in the storage.
+	// Limit the number of concurrent goroutines that may search TraceIDs in the storage.
 	// This should prevent from out of memory errors and CPU trashing when too many
-	// goroutines call searchTraceIDs.
+	// goroutines call SearchTraceIDs.
 	select {
-	case searchTSIDsConcurrencyCh <- struct{}{}:
+	case searchTraceIDsConcurrencyCh <- struct{}{}:
 	default:
 		// Sleep for a while until giving up
-		atomic.AddUint64(&s.searchTSIDsConcurrencyLimitReached, 1)
+		atomic.AddUint64(&s.searchTraceIDsConcurrencyLimitReached, 1)
 		currentTime := fasttime.UnixTimestamp()
 		timeoutSecs := uint64(0)
 		if currentTime < deadline {
@@ -515,28 +515,28 @@ func (s *Storage) searchTraceIDs(tfss []*TagFilters, tr ScanRange, deadline uint
 		timeout := time.Second * time.Duration(timeoutSecs)
 		t := timerpool.Get(timeout)
 		select {
-		case searchTSIDsConcurrencyCh <- struct{}{}:
+		case searchTraceIDsConcurrencyCh <- struct{}{}:
 			timerpool.Put(t)
 		case <-t.C:
 			timerpool.Put(t)
-			atomic.AddUint64(&s.searchTSIDsConcurrencyLimitTimeout, 1)
+			atomic.AddUint64(&s.searchTraceIDsConcurrencyLimitTimeout, 1)
 			return nil, fmt.Errorf("cannot search for tsids, since more than %d concurrent searches are performed during %.3f secs; add more CPUs or reduce query load",
-				cap(searchTSIDsConcurrencyCh), timeout.Seconds())
+				cap(searchTraceIDsConcurrencyCh), timeout.Seconds())
 		}
 	}
-	tsids, err := s.idb().searchTraceIDs(tfss, tr, deadline)
-	<-searchTSIDsConcurrencyCh
+	traceIDs, err := s.idb().searchTraceIDs(tfss, tr, deadline)
+	<-searchTraceIDsConcurrencyCh
 	if err != nil {
 		return nil, fmt.Errorf("error when searching tsids: %w", err)
 	}
-	return tsids, nil
+	return traceIDs, nil
 }
 
 var (
 	// Limit the concurrency for TraceID searches to GOMAXPROCS*2, since this operation
 	// is CPU bound and sometimes disk IO bound, so there is no sense in running more
 	// than GOMAXPROCS*2 concurrent goroutines for TraceID searches.
-	searchTSIDsConcurrencyCh = make(chan struct{}, runtime.GOMAXPROCS(-1)*2)
+	searchTraceIDsConcurrencyCh = make(chan struct{}, runtime.GOMAXPROCS(-1)*2)
 )
 
 // ErrDeadlineExceeded is returned when the request times out.
@@ -983,7 +983,7 @@ func (s *Storage) addIndex(rows []rawRow) error {
 	atomic.AddUint64(&s.slowPerDayIndexInserts, uint64(len(pendingHourSpans)))
 
 	sort.Slice(pendingHourSpans, func(i, j int) bool {
-		return pendingHourSpans[i].traceID.Less(pendingHourSpans[j].traceID)
+		return pendingHourSpans[i].metricID < pendingHourSpans[j].metricID
 	})
 
 	idb := s.idb()

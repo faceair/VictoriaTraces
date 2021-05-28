@@ -27,8 +27,8 @@ const (
 	nsPrefixMetricIDToMetricName = 0
 	nsPrefixMetricNameToMetricID = 1
 
+	nsPrefixTagKeyValue = 2
 	// Prefix for (Tag,Time)->TraceID entries.
-	nsPrefixTagKeyValue      = 2
 	nsPrefixTagTimeToTraceID = 3
 )
 
@@ -582,38 +582,38 @@ func (db *indexDB) searchTraceIDs(tfss []*TagFilters, tr ScanRange, deadline uin
 		return nil, nil
 	}
 
-	// Slow path - search for tsids in the db and extDB.
+	// Slow path - search for traceIDs in the db and extDB.
 	is := db.getIndexSearch(deadline)
-	localTSIDs, err := is.searchTraceIDs(tfss, tr)
+	localTraceIDs, err := is.searchTraceIDs(tfss, tr)
 	db.putIndexSearch(is)
 	if err != nil {
 		return nil, err
 	}
 
-	var extTSIDs []TraceID
+	var extTraceIDs []TraceID
 	if db.doExtDB(func(extDB *indexDB) {
 
 		is := extDB.getIndexSearch(deadline)
-		extTSIDs, err = is.searchTraceIDs(tfss, tr)
+		extTraceIDs, err = is.searchTraceIDs(tfss, tr)
 		extDB.putIndexSearch(is)
 
-		sort.Slice(extTSIDs, func(i, j int) bool { return extTSIDs[i].Less(extTSIDs[j]) })
+		sort.Slice(extTraceIDs, func(i, j int) bool { return extTraceIDs[i].Less(extTraceIDs[j]) })
 	}) {
 		if err != nil {
 			return nil, err
 		}
 	}
-	// Merge localTSIDs with extTSIDs.
-	tsids := mergeTSIDs(localTSIDs, extTSIDs)
+	// Merge localTraceIDs with extTraceIDs.
+	traceIDs := mergeTraceIDs(localTraceIDs, extTraceIDs)
 
-	// Sort the found tsids, since they must be passed to TraceID search
+	// Sort the found traceIDs, since they must be passed to TraceID search
 	// in the sorted order.
-	sort.Slice(tsids, func(i, j int) bool { return tsids[i].Less(tsids[j]) })
+	sort.Slice(traceIDs, func(i, j int) bool { return traceIDs[i].Less(traceIDs[j]) })
 
-	return tsids, err
+	return traceIDs, err
 }
 
-func mergeTSIDs(a, b []TraceID) []TraceID {
+func mergeTraceIDs(a, b []TraceID) []TraceID {
 	if len(b) > len(a) {
 		a, b = b, a
 	}
@@ -622,19 +622,19 @@ func mergeTSIDs(a, b []TraceID) []TraceID {
 	}
 	m := make(map[TraceID]TraceID, len(a))
 	for i := range a {
-		tsid := a[i]
-		m[tsid] = tsid
+		traceID := a[i]
+		m[traceID] = traceID
 	}
 	for i := range b {
-		tsid := b[i]
-		m[tsid] = tsid
+		traceID := b[i]
+		m[traceID] = traceID
 	}
 
-	tsids := make([]TraceID, 0, len(m))
-	for _, tsid := range m {
-		tsids = append(tsids, tsid)
+	traceIDS := make([]TraceID, 0, len(m))
+	for _, traceID := range m {
+		traceIDS = append(traceIDS, traceID)
 	}
-	return tsids
+	return traceIDS
 }
 
 func matchTagFilters(mn *SpanName, tfs []*tagFilter, kb *bytesutil.ByteBuffer) (bool, error) {

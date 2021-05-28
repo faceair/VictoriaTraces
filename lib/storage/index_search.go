@@ -58,7 +58,7 @@ func (is *indexSearch) createIndexes(traceID TraceID, metricID, timestamp uint64
 	return nil
 }
 
-// GetOrCreateTSIDByName fills the dst with TraceID for the given metricName.
+// GetOrCreateMetricID return metricID for the given metricName.
 func (is *indexSearch) GetOrCreateMetricID(metricName []byte) (uint64, error) {
 	var err error
 	var metricID uint64

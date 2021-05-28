@@ -9,6 +9,10 @@ import (
 
 type TraceID = uint128.Uint128
 
+func UnmarshalTraceID(src []byte) (TraceID, []byte, error) {
+	return uint128.Unmarshal(src)
+}
+
 func parseTraceID(s string) (TraceID, error) {
 	var hi, lo uint64
 	var err error

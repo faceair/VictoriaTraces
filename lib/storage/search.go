@@ -142,8 +142,8 @@ func (s *Search) Init(storage *Storage, tfss []*TagFilters, tr ScanRange, deadli
 	s.deadline = deadline
 	s.needClosing = true
 
-	tsids, err := storage.searchTraceIDs(tfss, tr, deadline)
-	// It is ok to call Init on error from storage.searchTraceIDs.
+	tsids, err := storage.SearchTraceIDs(tfss, tr, deadline)
+	// It is ok to call Init on error from storage.SearchTraceIDs.
 	// Init must be called before returning because it will fail
 	// on Seach.MustClose otherwise.
 	s.ts.Init(storage.tb, tsids, tr)

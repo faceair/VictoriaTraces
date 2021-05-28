@@ -17,8 +17,8 @@ func Unmarshal(src []byte) (Uint128, []byte, error) {
 }
 
 type Uint128 struct {
-	lo uint64
-	hi uint64
+	Lo uint64
+	Hi uint64
 }
 
 var marshaledUint128Size = func() int {
@@ -28,12 +28,12 @@ var marshaledUint128Size = func() int {
 }()
 
 func (t Uint128) Reset() {
-	t.lo, t.hi = 0, 0
+	t.Lo, t.Hi = 0, 0
 }
 
 func (t Uint128) Marshal(dst []byte) []byte {
-	dst = encoding.MarshalUint64(dst, t.hi)
-	dst = encoding.MarshalUint64(dst, t.lo)
+	dst = encoding.MarshalUint64(dst, t.Hi)
+	dst = encoding.MarshalUint64(dst, t.Lo)
 	return dst
 }
 
@@ -42,9 +42,9 @@ func (t Uint128) Unmarshal(src []byte) ([]byte, error) {
 		return nil, fmt.Errorf("too short src; got %d bytes; want %d bytes", len(src), marshaledUint128Size)
 	}
 
-	t.hi = encoding.UnmarshalUint64(src)
+	t.Hi = encoding.UnmarshalUint64(src)
 	src = src[8:]
-	t.lo = encoding.UnmarshalUint64(src)
+	t.Lo = encoding.UnmarshalUint64(src)
 	src = src[8:]
 	return src, nil
 }
@@ -54,12 +54,12 @@ func (t Uint128) Equals(v Uint128) bool {
 }
 
 func (t Uint128) Less(v Uint128) bool {
-	return t.hi < v.hi || (t.hi == v.hi && t.lo < v.lo)
+	return t.Hi < v.Hi || (t.Hi == v.Hi && t.Lo < v.Lo)
 }
 
 func (t Uint128) String() string {
-	if t.hi == 0 {
-		return fmt.Sprintf("%016x", t.lo)
+	if t.Hi == 0 {
+		return fmt.Sprintf("%016x", t.Lo)
 	}
-	return fmt.Sprintf("%016x%016x", t.hi, t.lo)
+	return fmt.Sprintf("%016x%016x", t.Hi, t.Lo)
 }
