@@ -78,6 +78,9 @@ func (s *Store) GetTrace(_ context.Context, traceID model.TraceID) (*model.Trace
 		traces = append(traces, trace)
 		return nil
 	})
+	if len(traces) == 0 {
+		return nil, spanstore.ErrTraceNotFound
+	}
 	return traces[0], err
 }
 

@@ -68,7 +68,7 @@ func (ps *partSearch) Init(p *part, tsids []TraceID, tr ScanRange) {
 	ps.p = p
 
 	if p.ph.MinTimestamp <= tr.MaxTimestamp && p.ph.MaxTimestamp >= tr.MinTimestamp {
-		if isInTest && !sort.SliceIsSorted(tsids, func(i, j int) bool { return tsids[i].Less(tsids[j]) }) {
+		if isInTest && !sort.SliceIsSorted(tsids, func(i, j int) bool { return tsids[i].Less(&tsids[j]) }) {
 			logger.Panicf("BUG: tsids must be sorted; got %+v", tsids)
 		}
 		// take ownership of of tsids.
@@ -127,7 +127,7 @@ func (ps *partSearch) nextBHS() bool {
 	for len(ps.metaindex) > 0 {
 		// Optimization: skip tsid values smaller than the minimum value
 		// from ps.metaindex.
-		for ps.BlockRef.bh.TraceID.Less(ps.metaindex[0].TSID) {
+		for ps.BlockRef.bh.TraceID.Less(&ps.metaindex[0].TSID) {
 			if !ps.nextTSID() {
 				return false
 			}
@@ -139,7 +139,7 @@ func (ps *partSearch) nextBHS() bool {
 
 		mr := &ps.metaindex[0]
 		ps.metaindex = ps.metaindex[1:]
-		if ps.BlockRef.bh.TraceID.Less(mr.TSID) {
+		if ps.BlockRef.bh.TraceID.Less(&mr.TSID) {
 			logger.Panicf("BUG: invariant violation: ps.BlockRef.bh.TraceID cannot be smaller than mr.TraceID; got %+v vs %+v", &ps.BlockRef.bh.TraceID, &mr.TSID)
 		}
 
@@ -178,17 +178,17 @@ func (ps *partSearch) nextBHS() bool {
 
 func skipSmallMetaindexRows(metaindex []metaindexRow, tsid TraceID) []metaindexRow {
 	// Invariant: len(metaindex) > 0 && tsid >= metaindex[0].TraceID.
-	if tsid.Less(metaindex[0].TSID) {
+	if tsid.Less(&metaindex[0].TSID) {
 		logger.Panicf("BUG: invariant violation: tsid cannot be smaller than metaindex[0]; got %+v vs %+v", tsid, &metaindex[0].TSID)
 	}
 
-	if tsid.Equals(metaindex[0].TSID) {
+	if tsid.Equals(&metaindex[0].TSID) {
 		return metaindex
 	}
 
 	// Invariant: tsid > metaindex[0].TraceID, so sort.Search cannot return 0.
 	n := sort.Search(len(metaindex), func(i int) bool {
-		return !metaindex[i].TSID.Less(tsid)
+		return !metaindex[i].TSID.Less(&tsid)
 	})
 	if n == 0 {
 		logger.Panicf("BUG: invariant violation: sort.Search returned 0 for tsid > metaindex[0].TraceID; tsid=%+v; metaindex[0].TraceID=%+v",
@@ -231,14 +231,14 @@ func (ps *partSearch) searchBHS() bool {
 		bh := &ps.bhs[i]
 
 	nextTSID:
-		if bh.TraceID.Less(ps.BlockRef.bh.TraceID) {
+		if bh.TraceID.Less(&ps.BlockRef.bh.TraceID) {
 			// Skip blocks with small tsid values.
 			continue
 		}
 
 		// Invariant: ps.BlockRef.bh.TraceID <= bh.TraceID
 
-		if !bh.TraceID.Equals(ps.BlockRef.bh.TraceID) {
+		if !bh.TraceID.Equals(&ps.BlockRef.bh.TraceID) {
 			// ps.BlockRef.bh.TraceID < bh.TraceID: no more blocks with the given tsid.
 			// Proceed to the next (bigger) tsid.
 			if !ps.nextTSID() {

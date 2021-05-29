@@ -75,10 +75,10 @@ func mergeBlockStreamsInternal(ph *partHeader, bsw *blockStreamWriter, bsm *bloc
 		}
 
 		// Verify whether pendingBlock may be merged with bsm.Block (the current block).
-		if !pendingBlock.bh.TraceID.Equals(bsm.Block.bh.TraceID) {
+		if !pendingBlock.bh.TraceID.Equals(&bsm.Block.bh.TraceID) {
 			// Fast path - blocks belong to distinct time series.
 			// Write the pendingBlock and then deal with bsm.Block.
-			if bsm.Block.bh.TraceID.Less(pendingBlock.bh.TraceID) {
+			if bsm.Block.bh.TraceID.Less(&pendingBlock.bh.TraceID) {
 				logger.Panicf("BUG: the next TraceID=%+v is smaller than the current TraceID=%+v", &bsm.Block.bh.TraceID, &pendingBlock.bh.TraceID)
 			}
 			bsw.WriteExternalBlock(pendingBlock, ph, rowsMerged)

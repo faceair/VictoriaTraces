@@ -38,8 +38,8 @@ type Block struct {
 	valuesData []byte
 }
 
-func (b *Block) TraceID() TraceID {
-	return b.bh.TraceID
+func (b *Block) TraceID() *TraceID {
+	return &b.bh.TraceID
 }
 
 // Reset resets b.
@@ -129,7 +129,7 @@ func (b *Block) assertUnmarshaled() {
 // assertMergeable makes sure b and ib are mergeable, i.e. they have the same
 // tsid and scale.
 func (b *Block) assertMergeable(ib *Block) {
-	if !b.bh.TraceID.Equals(ib.bh.TraceID) {
+	if !b.bh.TraceID.Equals(&ib.bh.TraceID) {
 		logger.Panicf("BUG: unequal TraceID: %q vs %q", &b.bh.TraceID, &ib.bh.TraceID)
 	}
 }

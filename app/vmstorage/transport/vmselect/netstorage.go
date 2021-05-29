@@ -31,7 +31,7 @@ import (
 // ProcessSearchQuery returns Result slice.
 type Result struct {
 	// The name of the metric.
-	SpanName storage.SpanName
+	TraceID storage.TraceID
 
 	// Values are sorted by Timestamps.
 	Values     [][]byte
@@ -43,7 +43,7 @@ type Result struct {
 }
 
 func (r *Result) reset() {
-	r.SpanName.Reset()
+	r.TraceID.Reset()
 	r.Values = r.Values[:0]
 	r.Timestamps = r.Timestamps[:0]
 	r.MetricNameMarshaled = r.MetricNameMarshaled[:0]
@@ -266,7 +266,7 @@ var unpackBatchSize = 8 * cgroup.AvailableCPUs()
 // Unpack unpacks pts to dst.
 func (pts *packedTimeseries) Unpack(tbf *tmpBlocksFile, dst *Result, sr storage.ScanRange, fetchData bool) error {
 	dst.reset()
-	if err := dst.SpanName.Unmarshal(bytesutil.ToUnsafeBytes(pts.metricName)); err != nil {
+	if _, err := dst.TraceID.Unmarshal(bytesutil.ToUnsafeBytes(pts.metricName)); err != nil {
 		return fmt.Errorf("cannot unmarshal metricName %q: %w", pts.metricName, err)
 	}
 	if !fetchData {
@@ -584,7 +584,7 @@ func ProcessSearchQuery(denyPartialResponse bool, sq *storage.SearchQuery, deadl
 	if deadline.Exceeded() {
 		return nil, false, fmt.Errorf("timeout exceeded before starting the query processing: %s", deadline.String())
 	}
-	fetchData := sq.FetchData == storage.NotFetch
+	fetchData := sq.FetchData != storage.NotFetch
 	tr := storage.ScanRange{
 		MinTimestamp: sq.MinTimestamp,
 		MaxTimestamp: sq.MaxTimestamp,

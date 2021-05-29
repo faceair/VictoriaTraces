@@ -597,7 +597,7 @@ func (db *indexDB) searchTraceIDs(tfss []*TagFilters, tr ScanRange, deadline uin
 		extTraceIDs, err = is.searchTraceIDs(tfss, tr)
 		extDB.putIndexSearch(is)
 
-		sort.Slice(extTraceIDs, func(i, j int) bool { return extTraceIDs[i].Less(extTraceIDs[j]) })
+		sort.Slice(extTraceIDs, func(i, j int) bool { return extTraceIDs[i].Less(&extTraceIDs[j]) })
 	}) {
 		if err != nil {
 			return nil, err
@@ -608,7 +608,7 @@ func (db *indexDB) searchTraceIDs(tfss []*TagFilters, tr ScanRange, deadline uin
 
 	// Sort the found traceIDs, since they must be passed to TraceID search
 	// in the sorted order.
-	sort.Slice(traceIDs, func(i, j int) bool { return traceIDs[i].Less(traceIDs[j]) })
+	sort.Slice(traceIDs, func(i, j int) bool { return traceIDs[i].Less(&traceIDs[j]) })
 
 	return traceIDs, err
 }
@@ -1025,7 +1025,7 @@ type traceIDSorter []TraceID
 
 func (s traceIDSorter) Len() int { return len(s) }
 func (s traceIDSorter) Less(i, j int) bool {
-	return s[i].Less(s[j])
+	return s[i].Less(&s[j])
 }
 func (s traceIDSorter) Swap(i, j int) {
 	s[i], s[j] = s[j], s[i]

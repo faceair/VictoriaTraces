@@ -51,8 +51,8 @@ func (rrs *rawRowsSort) Less(i, j int) bool {
 	a := &x[i]
 	b := &x[j]
 
-	if !a.TraceID.Equals(b.TraceID) {
-		return a.TraceID.Less(b.TraceID)
+	if !a.TraceID.Equals(&b.TraceID) {
+		return a.TraceID.Less(&b.TraceID)
 	}
 	return a.Timestamp < b.Timestamp
 }
@@ -88,7 +88,7 @@ func (rrm *rawRowsMarshaler) marshalToInmemoryPart(mp *inmemoryPart, rows []rawR
 	defer putBlock(tmpBlock)
 	for i := range rows {
 		r = &rows[i]
-		if r.TraceID.Equals(traceID) && len(rrm.auxTimestamps) < maxRowsPerBlock {
+		if r.TraceID.Equals(&traceID) && len(rrm.auxTimestamps) < maxRowsPerBlock {
 			rrm.auxTimestamps = append(rrm.auxTimestamps, r.Timestamp)
 			rrm.auxFloatValues = append(rrm.auxFloatValues, r.Value)
 			continue

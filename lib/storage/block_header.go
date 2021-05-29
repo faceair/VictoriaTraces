@@ -66,7 +66,7 @@ func (bh *blockHeader) Less(src *blockHeader) bool {
 	}
 
 	// Slow path for distinct TSIDs.
-	return bh.TraceID.Less(src.TraceID)
+	return bh.TraceID.Less(&src.TraceID)
 }
 
 // marshaledBlockHeaderSize is the size of marshaled block header.
@@ -178,7 +178,7 @@ func unmarshalBlockHeaders(dst []blockHeader, src []byte, blockHeadersCount int)
 	}
 
 	// Verify that block headers are sorted by tsid.
-	if !sort.SliceIsSorted(newBHS, func(i, j int) bool { return newBHS[i].TraceID.Less(newBHS[j].TraceID) }) {
+	if !sort.SliceIsSorted(newBHS, func(i, j int) bool { return newBHS[i].TraceID.Less(&newBHS[j].TraceID) }) {
 		return dst, fmt.Errorf("block headers must be sorted by tsid; unmarshaled unsorted block headers: %+v", newBHS)
 	}
 

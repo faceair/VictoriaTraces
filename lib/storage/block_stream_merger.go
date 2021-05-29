@@ -117,12 +117,12 @@ func (bsrh *blockStreamReaderHeap) Len() int {
 func (bsrh *blockStreamReaderHeap) Less(i, j int) bool {
 	x := *bsrh
 	a, b := &x[i].Block.bh, &x[j].Block.bh
-	if a.TraceID.Equals(b.TraceID) {
+	if a.TraceID.Equals(&b.TraceID) {
 		// Fast path for identical TraceID values.
 		return a.MinTimestamp < b.MinTimestamp
 	}
 	// Slow path for distinct TraceID values.
-	return a.TraceID.Less(b.TraceID)
+	return a.TraceID.Less(&b.TraceID)
 }
 
 func (bsrh *blockStreamReaderHeap) Swap(i, j int) {

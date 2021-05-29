@@ -157,7 +157,7 @@ func unmarshalMetaindexRows(dst []metaindexRow, r io.Reader) ([]metaindexRow, er
 
 	// Make sure metaindex rows are sorted by tsid
 	tmp := dst[dstLen:]
-	ok := sort.SliceIsSorted(tmp, func(i, j int) bool { return tmp[i].TSID.Less(tmp[j].TSID) })
+	ok := sort.SliceIsSorted(tmp, func(i, j int) bool { return tmp[i].TSID.Less(&tmp[j].TSID) })
 	if !ok {
 		return dst, fmt.Errorf("metaindexRow values must be sorted by TraceID; got %+v", tmp)
 	}
