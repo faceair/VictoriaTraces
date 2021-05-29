@@ -69,13 +69,6 @@ func (tfs *TagFilters) Add(key, value []byte, isNegative, isRegexp bool) error {
 			return fmt.Errorf(`cannot initialize {%s=".+"} tag filter: %w`, key, err)
 		}
 	}
-	if len(tf.graphiteReverseSuffix) > 0 {
-		re := regexp.QuoteMeta(string(tf.graphiteReverseSuffix)) + ".*"
-		tfNew := tfs.addTagFilter()
-		if err := tfNew.Init(tfs.commonPrefix, graphiteReverseTagKey, []byte(re), false, true); err != nil {
-			return fmt.Errorf("cannot initialize reverse tag filter for Graphite wildcard: %w", err)
-		}
-	}
 	return nil
 }
 
@@ -170,10 +163,6 @@ type tagFilter struct {
 
 	// Set to true for filters matching empty value.
 	isEmptyMatch bool
-
-	// Contains reverse suffix for Graphite wildcard.
-	// I.e. for `{__name__=~"foo\\.[^.]*\\.bar\\.baz"}` the value will be `zab.rab.`
-	graphiteReverseSuffix []byte
 }
 
 func (tf *tagFilter) Less(other *tagFilter) bool {
@@ -247,7 +236,6 @@ func (tf *tagFilter) Init(commonPrefix, key, value []byte, isNegative, isRegexp 
 	tf.orSuffixes = tf.orSuffixes[:0]
 	tf.reSuffixMatch = nil
 	tf.isEmptyMatch = false
-	tf.graphiteReverseSuffix = tf.graphiteReverseSuffix[:0]
 
 	tf.prefix = append(tf.prefix, commonPrefix...)
 	tf.prefix = marshalTagValue(tf.prefix, key)
@@ -278,10 +266,6 @@ func (tf *tagFilter) Init(commonPrefix, key, value []byte, isNegative, isRegexp 
 	tf.reSuffixMatch = rcv.reMatch
 	tf.matchCost = rcv.reCost
 	tf.isEmptyMatch = len(prefix) == 0 && tf.reSuffixMatch(nil)
-	if !tf.isNegative && len(key) == 0 && strings.IndexByte(rcv.literalSuffix, '.') >= 0 {
-		// Reverse suffix is needed only for non-negative regexp filters on __name__ that contains dots.
-		tf.graphiteReverseSuffix = reverseBytes(tf.graphiteReverseSuffix[:0], []byte(rcv.literalSuffix))
-	}
 	return nil
 }
 
