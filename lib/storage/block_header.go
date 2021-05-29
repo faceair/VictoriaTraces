@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/faceair/VictoriaTraces/lib/encodingext"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
+	"github.com/faceair/VictoriaTraces/lib/encodingext"
 )
 
 // blockHeader is a header for a time series block.

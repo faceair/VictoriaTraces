@@ -3,10 +3,10 @@ package encodingext
 import (
 	"fmt"
 
-	"github.com/faceair/VictoriaTraces/lib/decimalext"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
+	"github.com/faceair/VictoriaTraces/lib/decimalext"
 )
 
 // MarshalType is the type used for the marshaling.
