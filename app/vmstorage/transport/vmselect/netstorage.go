@@ -36,17 +36,12 @@ type Result struct {
 	// Values are sorted by Timestamps.
 	Values     [][]byte
 	Timestamps []int64
-
-	// Marshaled SpanName. Used only for results sorting
-	// in app/vmselect/promql
-	MetricNameMarshaled []byte
 }
 
 func (r *Result) reset() {
 	r.TraceID.Reset()
 	r.Values = r.Values[:0]
 	r.Timestamps = r.Timestamps[:0]
-	r.MetricNameMarshaled = r.MetricNameMarshaled[:0]
 }
 
 // Results holds results returned from ProcessSearchQuery.
@@ -178,8 +173,8 @@ var perQuerySeriesProcessed = metrics.NewHistogram(`vm_per_query_series_processe
 var gomaxprocs = cgroup.AvailableCPUs()
 
 type packedTimeseries struct {
-	metricName string
-	addrs      []tmpBlockAddr
+	traceID string
+	addrs   []tmpBlockAddr
 }
 
 var unpackWorkCh = make(chan *unpackWork, gomaxprocs*128)
@@ -266,8 +261,8 @@ var unpackBatchSize = 8 * cgroup.AvailableCPUs()
 // Unpack unpacks pts to dst.
 func (pts *packedTimeseries) Unpack(tbf *tmpBlocksFile, dst *Result, sr storage.ScanRange, fetchData bool) error {
 	dst.reset()
-	if _, err := dst.TraceID.Unmarshal(bytesutil.ToUnsafeBytes(pts.metricName)); err != nil {
-		return fmt.Errorf("cannot unmarshal metricName %q: %w", pts.metricName, err)
+	if _, err := dst.TraceID.Unmarshal(bytesutil.ToUnsafeBytes(pts.traceID)); err != nil {
+		return fmt.Errorf("cannot unmarshal traceID %q: %w", pts.traceID, err)
 	}
 	if !fetchData {
 		// Do not spend resources on data reading and unpacking.
@@ -494,20 +489,20 @@ func deduplicateStrings(a []string) []string {
 }
 
 type tmpBlocksFileWrapper struct {
-	mu                 sync.Mutex
-	tbf                *tmpBlocksFile
-	m                  map[string][]tmpBlockAddr
-	orderedMetricNames []string
+	mu              sync.Mutex
+	tbf             *tmpBlocksFile
+	m               map[string][]tmpBlockAddr
+	orderedTraceIDs []string
 }
 
 func (tbfw *tmpBlocksFileWrapper) RegisterEmptyBlock(mb *storage.Block) {
 	traceID := mb.TraceID().String()
 	tbfw.mu.Lock()
 	if addrs := tbfw.m[traceID]; addrs == nil {
-		// An optimization for big number of time series with long names: store only a single copy of metricNameStr
-		// in both tbfw.orderedMetricNames and tbfw.m.
-		tbfw.orderedMetricNames = append(tbfw.orderedMetricNames, traceID)
-		tbfw.m[tbfw.orderedMetricNames[len(tbfw.orderedMetricNames)-1]] = []tmpBlockAddr{{}}
+		// An optimization for big number of time series with long names: store only a single copy of traceID
+		// in both tbfw.orderedTraceIDs and tbfw.m.
+		tbfw.orderedTraceIDs = append(tbfw.orderedTraceIDs, traceID)
+		tbfw.m[tbfw.orderedTraceIDs[len(tbfw.orderedTraceIDs)-1]] = []tmpBlockAddr{{}}
 	}
 	tbfw.mu.Unlock()
 }
@@ -523,13 +518,13 @@ func (tbfw *tmpBlocksFileWrapper) RegisterAndWriteBlock(mb *storage.Block) error
 		addrs := tbfw.m[traceID]
 		addrs = append(addrs, addr)
 		if len(addrs) > 1 {
-			// An optimization: avoid memory allocation and copy for already existing metricName key in tbfw.m.
+			// An optimization: avoid memory allocation and copy for already existing traceID key in tbfw.m.
 			tbfw.m[traceID] = addrs
 		} else {
-			// An optimization for big number of time series with long names: store only a single copy of metricNameStr
-			// in both tbfw.orderedMetricNames and tbfw.m.
-			tbfw.orderedMetricNames = append(tbfw.orderedMetricNames, traceID)
-			tbfw.m[tbfw.orderedMetricNames[len(tbfw.orderedMetricNames)-1]] = addrs
+			// An optimization for big number of time series with long names: store only a single copy of traceID
+			// in both tbfw.orderedTraceIDs and tbfw.m.
+			tbfw.orderedTraceIDs = append(tbfw.orderedTraceIDs, traceID)
+			tbfw.m[tbfw.orderedTraceIDs[len(tbfw.orderedTraceIDs)-1]] = addrs
 		}
 	}
 	tbfw.mu.Unlock()
@@ -630,11 +625,11 @@ func ProcessSearchQuery(denyPartialResponse bool, sq *storage.SearchQuery, deadl
 	rss.fetchData = fetchData
 	rss.deadline = deadline
 	rss.tbf = tbfw.tbf
-	pts := make([]packedTimeseries, len(tbfw.orderedMetricNames))
-	for i, metricName := range tbfw.orderedMetricNames {
+	pts := make([]packedTimeseries, len(tbfw.orderedTraceIDs))
+	for i, traceID := range tbfw.orderedTraceIDs {
 		pts[i] = packedTimeseries{
-			metricName: metricName,
-			addrs:      tbfw.m[metricName],
+			traceID: traceID,
+			addrs:   tbfw.m[traceID],
 		}
 	}
 	rss.packedTimeseries = pts
@@ -1168,7 +1163,7 @@ func (sn *storageNode) processSearchTraceIDsOnConn(bc *handshake.BufferedConn, r
 	// Read metricNames from response.
 	traceIDsCount, err := readUint64(bc)
 	if err != nil {
-		return nil, fmt.Errorf("cannot read metricNamesCount: %w", err)
+		return nil, fmt.Errorf("cannot read traceIDsCount: %w", err)
 	}
 	traceIDs := make([]storage.TraceID, traceIDsCount)
 	for i := int64(0); i < int64(traceIDsCount); i++ {
