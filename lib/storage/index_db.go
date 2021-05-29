@@ -660,11 +660,6 @@ func matchTagFilters(mn *SpanName, tfs []*tagFilter, kb *bytesutil.ByteBuffer) (
 			}
 			continue
 		}
-		if bytes.Equal(tf.key, graphiteReverseTagKey) {
-			// Skip artificial tag filter for Graphite-like metric names with dots,
-			// since mn doesn't contain the corresponding tag.
-			continue
-		}
 
 		// Search for matching tag name.
 		tagMatched := false
@@ -731,20 +726,6 @@ func matchTagFilter(b []byte, tf *tagFilter) (bool, error) {
 		return tf.isNegative, nil
 	}
 	return !tf.isNegative, nil
-}
-
-// The tag key for reverse metric name used for speeding up searching
-// for Graphite wildcards with suffix matching small number of time series,
-// i.e. '*.bar.baz'.
-//
-// It is expected that the given key isn't be used by users.
-var graphiteReverseTagKey = []byte("\xff")
-
-func reverseBytes(dst, src []byte) []byte {
-	for i := len(src) - 1; i >= 0; i-- {
-		dst = append(dst, src[i])
-	}
-	return dst
 }
 
 func appendDateTagFilterCacheKey(dst []byte, date uint64, tf *tagFilter) []byte {
