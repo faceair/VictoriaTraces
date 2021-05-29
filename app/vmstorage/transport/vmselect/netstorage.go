@@ -549,10 +549,10 @@ func SearchTraceIDs(denyPartialResponse bool, sq *storage.SearchQuery, deadline 
 		err      error
 	}
 	snr := startStorageNodesRequest(denyPartialResponse, func(idx int, sn *storageNode) interface{} {
-		sn.searchMetricNamesRequests.Inc()
+		sn.searchTraceIDsRequests.Inc()
 		traceIDs, err := sn.processSearchTraceIDs(requestData, deadline)
 		if err != nil {
-			sn.searchMetricNamesErrors.Inc()
+			sn.searchTraceIDsErrors.Inc()
 			err = fmt.Errorf("cannot search metric names on vmstorage %s: %w", sn.connPool.Addr(), err)
 		}
 		return &nodeResult{
@@ -563,7 +563,7 @@ func SearchTraceIDs(denyPartialResponse bool, sq *storage.SearchQuery, deadline 
 
 	// Collect results.
 	traceIDs := make([]storage.TraceID, 0)
-	isPartial, err := snr.collectResults(partialSearchMetricNamesResults, func(result interface{}) error {
+	isPartial, err := snr.collectResults(partialSearchTraceIDsResults, func(result interface{}) error {
 		nr := result.(*nodeResult)
 		if nr.err != nil {
 			return nr.err
@@ -750,74 +750,20 @@ type storageNode struct {
 	// The channel for limiting the maximum number of concurrent queries to storageNode.
 	concurrentQueriesCh chan struct{}
 
-	// The number of RegisterMetricNames requests to storageNode.
-	registerMetricNamesRequests *metrics.Counter
-
-	// The number of RegisterMetricNames request errors to storageNode.
-	registerMetricNamesErrors *metrics.Counter
-
-	// The number of DeleteSeries requests to storageNode.
-	deleteSeriesRequests *metrics.Counter
-
-	// The number of DeleteSeries request errors to storageNode.
-	deleteSeriesErrors *metrics.Counter
-
-	// The number of requests to labels.
-	labelsOnTimeRangeRequests *metrics.Counter
-
-	// The number of requests to labels.
-	labelsRequests *metrics.Counter
-
-	// The number of errors during requests to labels.
-	labelsOnTimeRangeErrors *metrics.Counter
-
-	// The number of errors during requests to labels.
-	labelsErrors *metrics.Counter
-
-	// The number of requests to labelValuesOnTimeRange.
-	labelValuesOnTimeRangeRequests *metrics.Counter
-
 	// The number of requests to labelValues.
 	labelValuesRequests *metrics.Counter
-
-	// The number of errors during requests to labelValuesOnTimeRange.
-	labelValuesOnTimeRangeErrors *metrics.Counter
 
 	// The number of errors during requests to labelValues.
 	labelValuesErrors *metrics.Counter
 
-	// The number of requests to labelEntries.
-	labelEntriesRequests *metrics.Counter
-
-	// The number of errors during requests to labelEntries.
-	labelEntriesErrors *metrics.Counter
-
-	// The number of requests to tagValueSuffixes.
-	tagValueSuffixesRequests *metrics.Counter
-
-	// The number of errors during requests to tagValueSuffixes.
-	tagValueSuffixesErrors *metrics.Counter
-
-	// The number of requests to tsdb status.
-	tsdbStatusRequests *metrics.Counter
-
-	// The number of errors during requests to tsdb status.
-	tsdbStatusErrors *metrics.Counter
-
-	// The number of requests to seriesCount.
-	seriesCountRequests *metrics.Counter
-
-	// The number of errors during requests to seriesCount.
-	seriesCountErrors *metrics.Counter
-
 	// The number of 'search metric names' requests to storageNode.
-	searchMetricNamesRequests *metrics.Counter
+	searchTraceIDsRequests *metrics.Counter
 
 	// The number of search requests to storageNode.
 	searchRequests *metrics.Counter
 
 	// The number of 'search metric names' errors to storageNode.
-	searchMetricNamesErrors *metrics.Counter
+	searchTraceIDsErrors *metrics.Counter
 
 	// The number of search request errors to storageNode.
 	searchErrors *metrics.Counter
@@ -1378,32 +1324,13 @@ func InitStorageNodes(addrs []string) {
 
 			concurrentQueriesCh: make(chan struct{}, maxConcurrentQueriesPerStorageNode),
 
-			registerMetricNamesRequests:    metrics.NewCounter(fmt.Sprintf(`vm_requests_total{action="registerMetricNames", type="rpcClient", name="vmselect", addr=%q}`, addr)),
-			registerMetricNamesErrors:      metrics.NewCounter(fmt.Sprintf(`vm_request_errors_total{action="registerMetricNames", type="rpcClient", name="vmselect", addr=%q}`, addr)),
-			deleteSeriesRequests:           metrics.NewCounter(fmt.Sprintf(`vm_requests_total{action="deleteSeries", type="rpcClient", name="vmselect", addr=%q}`, addr)),
-			deleteSeriesErrors:             metrics.NewCounter(fmt.Sprintf(`vm_request_errors_total{action="deleteSeries", type="rpcClient", name="vmselect", addr=%q}`, addr)),
-			labelsOnTimeRangeRequests:      metrics.NewCounter(fmt.Sprintf(`vm_requests_total{action="labelsOnTimeRange", type="rpcClient", name="vmselect", addr=%q}`, addr)),
-			labelsRequests:                 metrics.NewCounter(fmt.Sprintf(`vm_requests_total{action="labels", type="rpcClient", name="vmselect", addr=%q}`, addr)),
-			labelsOnTimeRangeErrors:        metrics.NewCounter(fmt.Sprintf(`vm_request_errors_total{action="labelsOnTimeRange", type="rpcClient", name="vmselect", addr=%q}`, addr)),
-			labelsErrors:                   metrics.NewCounter(fmt.Sprintf(`vm_request_errors_total{action="labels", type="rpcClient", name="vmselect", addr=%q}`, addr)),
-			labelValuesOnTimeRangeRequests: metrics.NewCounter(fmt.Sprintf(`vm_requests_total{action="labelValuesOnTimeRange", type="rpcClient", name="vmselect", addr=%q}`, addr)),
-			labelValuesRequests:            metrics.NewCounter(fmt.Sprintf(`vm_requests_total{action="labelValues", type="rpcClient", name="vmselect", addr=%q}`, addr)),
-			labelValuesOnTimeRangeErrors:   metrics.NewCounter(fmt.Sprintf(`vm_request_errors_total{action="labelValuesOnTimeRange", type="rpcClient", name="vmselect", addr=%q}`, addr)),
-			labelValuesErrors:              metrics.NewCounter(fmt.Sprintf(`vm_request_errors_total{action="labelValues", type="rpcClient", name="vmselect", addr=%q}`, addr)),
-			labelEntriesRequests:           metrics.NewCounter(fmt.Sprintf(`vm_requests_total{action="labelEntries", type="rpcClient", name="vmselect", addr=%q}`, addr)),
-			labelEntriesErrors:             metrics.NewCounter(fmt.Sprintf(`vm_request_errors_total{action="labelEntries", type="rpcClient", name="vmselect", addr=%q}`, addr)),
-			tagValueSuffixesRequests:       metrics.NewCounter(fmt.Sprintf(`vm_requests_total{action="tagValueSuffixes", type="rpcClient", name="vmselect", addr=%q}`, addr)),
-			tagValueSuffixesErrors:         metrics.NewCounter(fmt.Sprintf(`vm_request_errors_total{action="tagValueSuffixes", type="rpcClient", name="vmselect", addr=%q}`, addr)),
-			tsdbStatusRequests:             metrics.NewCounter(fmt.Sprintf(`vm_requests_total{action="tsdbStatus", type="rpcClient", name="vmselect", addr=%q}`, addr)),
-			tsdbStatusErrors:               metrics.NewCounter(fmt.Sprintf(`vm_request_errors_total{action="tsdbStatus", type="rpcClient", name="vmselect", addr=%q}`, addr)),
-			seriesCountRequests:            metrics.NewCounter(fmt.Sprintf(`vm_requests_total{action="seriesCount", type="rpcClient", name="vmselect", addr=%q}`, addr)),
-			seriesCountErrors:              metrics.NewCounter(fmt.Sprintf(`vm_request_errors_total{action="seriesCount", type="rpcClient", name="vmselect", addr=%q}`, addr)),
-			searchMetricNamesRequests:      metrics.NewCounter(fmt.Sprintf(`vm_requests_total{action="searchMetricNames", type="rpcClient", name="vmselect", addr=%q}`, addr)),
-			searchRequests:                 metrics.NewCounter(fmt.Sprintf(`vm_requests_total{action="search", type="rpcClient", name="vmselect", addr=%q}`, addr)),
-			searchMetricNamesErrors:        metrics.NewCounter(fmt.Sprintf(`vm_request_errors_total{action="searchMetricNames", type="rpcClient", name="vmselect", addr=%q}`, addr)),
-			searchErrors:                   metrics.NewCounter(fmt.Sprintf(`vm_request_errors_total{action="search", type="rpcClient", name="vmselect", addr=%q}`, addr)),
-			metricBlocksRead:               metrics.NewCounter(fmt.Sprintf(`vm_metric_blocks_read_total{name="vmselect", addr=%q}`, addr)),
-			metricRowsRead:                 metrics.NewCounter(fmt.Sprintf(`vm_metric_rows_read_total{name="vmselect", addr=%q}`, addr)),
+			labelValuesErrors:      metrics.NewCounter(fmt.Sprintf(`vm_request_errors_total{action="labelValues", type="rpcClient", name="vmselect", addr=%q}`, addr)),
+			searchTraceIDsRequests: metrics.NewCounter(fmt.Sprintf(`vm_requests_total{action="searchTraceIDs", type="rpcClient", name="vmselect", addr=%q}`, addr)),
+			searchRequests:         metrics.NewCounter(fmt.Sprintf(`vm_requests_total{action="search", type="rpcClient", name="vmselect", addr=%q}`, addr)),
+			searchTraceIDsErrors:   metrics.NewCounter(fmt.Sprintf(`vm_request_errors_total{action="searchTraceIDs", type="rpcClient", name="vmselect", addr=%q}`, addr)),
+			searchErrors:           metrics.NewCounter(fmt.Sprintf(`vm_request_errors_total{action="search", type="rpcClient", name="vmselect", addr=%q}`, addr)),
+			metricBlocksRead:       metrics.NewCounter(fmt.Sprintf(`vm_metric_blocks_read_total{name="vmselect", addr=%q}`, addr)),
+			metricRowsRead:         metrics.NewCounter(fmt.Sprintf(`vm_metric_rows_read_total{name="vmselect", addr=%q}`, addr)),
 		}
 		metrics.NewGauge(fmt.Sprintf(`vm_concurrent_queries{name="vmselect", addr=%q}`, addr), func() float64 {
 			return float64(len(sn.concurrentQueriesCh))
@@ -1418,16 +1345,9 @@ func Stop() {
 }
 
 var (
-	partialLabelsOnTimeRangeResults      = metrics.NewCounter(`vm_partial_results_total{type="labels_on_time_range", name="vmselect"}`)
-	partialLabelsResults                 = metrics.NewCounter(`vm_partial_results_total{type="labels", name="vmselect"}`)
-	partialLabelValuesOnTimeRangeResults = metrics.NewCounter(`vm_partial_results_total{type="label_values_on_time_range", name="vmselect"}`)
-	partialLabelValuesResults            = metrics.NewCounter(`vm_partial_results_total{type="label_values", name="vmselect"}`)
-	partialTagValueSuffixesResults       = metrics.NewCounter(`vm_partial_results_total{type="tag_value_suffixes", name="vmselect"}`)
-	partialLabelEntriesResults           = metrics.NewCounter(`vm_partial_results_total{type="label_entries", name="vmselect"}`)
-	partialTSDBStatusResults             = metrics.NewCounter(`vm_partial_results_total{type="tsdb_status", name="vmselect"}`)
-	partialSeriesCountResults            = metrics.NewCounter(`vm_partial_results_total{type="series_count", name="vmselect"}`)
-	partialSearchMetricNamesResults      = metrics.NewCounter(`vm_partial_results_total{type="search_metric_names", name="vmselect"}`)
-	partialSearchResults                 = metrics.NewCounter(`vm_partial_results_total{type="search", name="vmselect"}`)
+	partialLabelValuesResults    = metrics.NewCounter(`vm_partial_results_total{type="label_values", name="vmselect"}`)
+	partialSearchTraceIDsResults = metrics.NewCounter(`vm_partial_results_total{type="search_trace_ids", name="vmselect"}`)
+	partialSearchResults         = metrics.NewCounter(`vm_partial_results_total{type="search", name="vmselect"}`)
 )
 
 // The maximum number of concurrent queries per storageNode.
