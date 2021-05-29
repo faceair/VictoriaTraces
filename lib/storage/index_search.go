@@ -6,6 +6,7 @@ import (
 	"io"
 	"sort"
 
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/uint64set"
@@ -248,6 +249,17 @@ func (is *indexSearch) searchTraceIDs(tfss []*TagFilters, tr ScanRange) ([]Trace
 			}
 			// Stop the iteration, since we cannot find more metric ids with the remaining tfss.
 			break
+		}
+		for i := range tfs.tfs {
+			tf := &tfs.tfs[i]
+			if len(tf.key) == 0 && !tf.isNegative && !tf.isRegexp {
+				traceID, err := parseTraceID(bytesutil.ToUnsafeString(tf.value))
+				if err != nil {
+					return nil, err
+				}
+				traceIDs.Add(traceID)
+				break
+			}
 		}
 		m, err := is.getTraceIDsByScanRange(tfs, tr)
 		if err != nil {
