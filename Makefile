@@ -13,4 +13,4 @@ jaeger-agent:
 	cd app/jaeger-agent && go build . && mv ./jaeger-agent ../../bin
 
 run-jaeger-agent: jaeger-agent
-	SPAN_STORAGE_TYPE=grpc-plugin bin/jaeger-all-in-one --grpc-storage-plugin.binary bin/jaeger-agent --grpc-storage-plugin.configuration-file app/jaeger-agent/jaeger-agent.yaml
+	SPAN_STORAGE_TYPE=grpc-plugin bin/jaeger-all-in-one --grpc-storage-plugin.binary bin/jaeger-agent --grpc-storage-plugin.configuration-file app/jaeger-agent/jaeger-agent.yaml --grpc-storage-plugin.log-level debug
