@@ -1,0 +1,6 @@
+httpListenAddr: :8480
+cacheDataPath: /tmp/jaeger-agent
+vminsertNodes:
+  - 127.0.0.1:8400
+vmselectNodes:
+  - 127.0.0.1:8401

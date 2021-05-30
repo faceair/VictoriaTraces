@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"net/http"
 	"os"
 	"sync/atomic"
@@ -10,7 +11,6 @@ import (
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/buildinfo"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/envflag"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/flagutil"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fs"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/httpserver"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
@@ -24,15 +24,20 @@ import (
 	"github.com/faceair/VictoriaTraces/lib/storage"
 	"github.com/jaegertracing/jaeger/plugin/storage/grpc"
 	"github.com/jaegertracing/jaeger/plugin/storage/grpc/shared"
+	"gopkg.in/yaml.v2"
 )
 
 var (
+	configPath             = flag.String("config", "jaeger-agent.yaml", "A path to the plugin's configuration file")
 	maxLabelsPerTimeseries = flag.Int("maxLabelsPerTimeseries", 30, "The maximum number of labels accepted per time series. Superflouos labels are dropped")
-	httpListenAddr         = flag.String("httpListenAddr", ":8480", "Address to listen for http connections")
-	cacheDataPath          = flag.String("cacheDataPath", "", "Path to directory for cache files. Cache isn't saved if empty")
-	vminsertNodes          = flagutil.NewArray("vminsertNodes", "Address of vminsert nodes; usage: -storageNode=vmstorage-host1:8400 -storageNode=vmstorage-host2:8400")
-	vmselectNodes          = flagutil.NewArray("vmselectNodes", "Address of vmselect nodes; usage: -storageNode=vmstorage-host1:8400 -storageNode=vmstorage-host2:8400")
 )
+
+type Config struct {
+	HTTPListenAddr string   `yaml:"httpListenAddr"`
+	CacheDataPath  string   `yaml:"cacheDataPath"`
+	VMInsertNodes  []string `yaml:"vminsertNodes"`
+	VMSelectNodes  []string `yaml:"vmselectNodes"`
+}
 
 func main() {
 	// Write flags and help message to stdout, since it is easier to grep or pipe.
@@ -41,17 +46,28 @@ func main() {
 	buildinfo.Init()
 	logger.Init()
 
-	logger.Infof("initializing netstorage for storageNodes %s and %s...", *vminsertNodes, *vmselectNodes)
+	config := &Config{}
+
+	body, err := ioutil.ReadFile(*configPath)
+	if err != nil {
+		logger.Fatalf("read configFile %s failed: %s", configPath, err)
+	}
+	err = yaml.Unmarshal(body, config)
+	if err != nil {
+		logger.Fatalf("parse configFile %s failed: %s", configPath, err)
+	}
+
+	logger.Infof("initializing netstorage for storageNodes %s and %s...", config.VMInsertNodes, config.VMSelectNodes)
 	startTime := time.Now()
-	if len(*vminsertNodes) == 0 || len(*vmselectNodes) == 0 {
+	if len(config.VMInsertNodes) == 0 || len(config.VMSelectNodes) == 0 {
 		logger.Fatalf("missing -vminsertNodes or -vmselectNodes arg")
 	}
-	vminsert.InitStorageNodes(*vminsertNodes)
-	vmselect.InitStorageNodes(*vmselectNodes)
+	vminsert.InitStorageNodes(config.VMInsertNodes)
+	vmselect.InitStorageNodes(config.VMSelectNodes)
 	logger.Infof("successfully initialized netstorage in %.3f seconds", time.Since(startTime).Seconds())
 
-	if len(*cacheDataPath) > 0 {
-		tmpDataPath := *cacheDataPath + "/tmp"
+	if len(config.CacheDataPath) > 0 {
+		tmpDataPath := config.CacheDataPath + "/tmp"
 		fs.RemoveDirContents(tmpDataPath)
 		vmselect.InitTmpBlocksDir(tmpDataPath)
 	} else {
@@ -62,11 +78,11 @@ func main() {
 	common.StartUnmarshalWorkers()
 	writeconcurrencylimiter.Init()
 
-	grpc.Serve(&shared.PluginServices{Store: store.NewStore()})
-
 	go func() {
-		httpserver.Serve(*httpListenAddr, requestHandler)
+		httpserver.Serve(config.HTTPListenAddr, requestHandler)
 	}()
+
+	grpc.Serve(&shared.PluginServices{Store: store.NewStore()})
 
 	sig := procutil.WaitForSigterm()
 	logger.Infof("service received signal %s", sig)

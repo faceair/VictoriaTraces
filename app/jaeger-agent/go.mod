@@ -8,6 +8,7 @@ require (
 	github.com/faceair/VictoriaTraces v0.0.0
 	github.com/jaegertracing/jaeger v1.21.0
 	github.com/stretchr/testify v1.6.1
+	gopkg.in/yaml.v2 v2.4.0
 )
 
 replace github.com/faceair/VictoriaTraces v0.0.0 => ../../

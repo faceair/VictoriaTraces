@@ -1319,6 +1319,7 @@ func InitStorageNodes(addrs []string) {
 
 			concurrentQueriesCh: make(chan struct{}, maxConcurrentQueriesPerStorageNode),
 
+			labelValuesRequests:    metrics.NewCounter(fmt.Sprintf(`vm_requests_total{action="labelValues", type="rpcClient", name="vmselect", addr=%q}`, addr)),
 			labelValuesErrors:      metrics.NewCounter(fmt.Sprintf(`vm_request_errors_total{action="labelValues", type="rpcClient", name="vmselect", addr=%q}`, addr)),
 			searchTraceIDsRequests: metrics.NewCounter(fmt.Sprintf(`vm_requests_total{action="searchTraceIDs", type="rpcClient", name="vmselect", addr=%q}`, addr)),
 			searchRequests:         metrics.NewCounter(fmt.Sprintf(`vm_requests_total{action="search", type="rpcClient", name="vmselect", addr=%q}`, addr)),

@@ -803,18 +803,26 @@ func (mp *tagToTraceIDsRowParser) Init(b []byte, nsPrefixExpected byte) error {
 	if err != nil {
 		return fmt.Errorf("invalid tag->metricIDs row %q: %w", b, err)
 	}
+
 	if nsPrefix != nsPrefixExpected {
 		return fmt.Errorf("invalid prefix for tag->metricIDs row %q; got %d; want %d", b, nsPrefix, nsPrefixExpected)
 	}
 	mp.NSPrefix = nsPrefix
+
 	tail, err = mp.Tag.Unmarshal(tail)
 	if err != nil {
 		return fmt.Errorf("cannot unmarshal tag from tag->metricIDs row %q: %w", b, err)
 	}
 
-	timestamp := encoding.UnmarshalUint64(tail)
-	mp.Timestamp = timestamp
-	tail = tail[8:]
+	if nsPrefix == nsPrefixTagTimeToTraceIDs {
+		// unmarshal timestamp
+		if len(tail) < 8 {
+			return fmt.Errorf("cannot unmarshal timestamp from (tag, timestamp)->traceIDs row %q from %d bytes; want at least 8 bytes", b, len(tail))
+		}
+		timestamp := encoding.UnmarshalUint64(tail)
+		mp.Timestamp = timestamp
+		tail = tail[8:]
+	}
 
 	return mp.InitOnlyTail(b, tail)
 }
@@ -823,20 +831,25 @@ func (mp *tagToTraceIDsRowParser) Init(b []byte, nsPrefixExpected byte) error {
 func (mp *tagToTraceIDsRowParser) MarshalPrefix(dst []byte) []byte {
 	dst = marshalCommonPrefix(dst, mp.NSPrefix)
 	dst = mp.Tag.Marshal(dst)
-	dst = encoding.MarshalUint64(dst, mp.Timestamp)
+
+	if mp.NSPrefix == nsPrefixTagTimeToTraceIDs {
+		dst = encoding.MarshalUint64(dst, mp.Timestamp)
+	}
 	return dst
 }
 
 // InitOnlyTail initializes mp.tail from tail.
 //
-// b must contain tag->metricIDs row.
+// b must contain tag->traceIDs row.
 // b cannot be re-used until Reset call.
 func (mp *tagToTraceIDsRowParser) InitOnlyTail(b, tail []byte) error {
-	if len(tail) == 0 {
-		return fmt.Errorf("missing metricID in the tag->metricIDs row %q", b)
-	}
-	if len(tail)%8 != 0 {
-		return fmt.Errorf("invalid tail length in the tag->metricIDs row; got %d bytes; must be multiple of 8 bytes", len(tail))
+	if mp.NSPrefix == nsPrefixTagTimeToTraceIDs {
+		if len(tail) == 0 {
+			return fmt.Errorf("missing traceIDs in the tag->traceIDs row %q", b)
+		}
+		if len(tail)%8 != 0 {
+			return fmt.Errorf("invalid tail length in the tag->traceIDs row; got %d bytes; must be multiple of 8 bytes", len(tail))
+		}
 	}
 	mp.tail = tail
 	return nil
