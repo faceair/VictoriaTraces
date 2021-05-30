@@ -799,6 +799,27 @@ func putPendingMetricRows(pmrs *pendingSpanRows) {
 
 var pendingMetricRowsPool sync.Pool
 
+type pendingSpan struct {
+	timestamp uint64
+	metricID  uint64
+	traceID   TraceID
+}
+
+func getPendingSpans() []pendingSpan {
+	v := pendingSpansPool.Get()
+	if v == nil {
+		v = []pendingSpan{}
+	}
+	return v.([]pendingSpan)
+}
+
+func putPendingSpans(spans []pendingSpan) {
+	spans = spans[:0]
+	pendingSpansPool.Put(spans)
+}
+
+var pendingSpansPool sync.Pool
+
 func (s *Storage) addIndex(rows []rawRow) error {
 	var minute uint64
 	var (
@@ -806,14 +827,8 @@ func (s *Storage) addIndex(rows []rawRow) error {
 		prevMetricID uint64
 	)
 	currm := s.currMinuteTraceIDs.Load().(*minuteTraceIDs)
-	prevm := s.currMinuteTraceIDs.Load().(*minuteTraceIDs)
-
-	type pendingSpan struct {
-		timestamp uint64
-		metricID  uint64
-		traceID   TraceID
-	}
-	var pendingSpans []pendingSpan
+	prevm := s.prevMinuteTraceIDs.Load().(*minuteTraceIDs)
+	pendingSpans := getPendingSpans()
 	for i := range rows {
 		r := &rows[i]
 		traceID := r.TraceID
@@ -856,7 +871,7 @@ func (s *Storage) addIndex(rows []rawRow) error {
 		return nil
 	}
 
-	// Slow path - add new (date, metricID) entries to indexDB.
+	// Slow path - add new (metricID, traceID) entries to indexDB.
 	atomic.AddUint64(&s.slowPerDayIndexInserts, uint64(len(pendingSpans)))
 	// Sort pendingSpans by (metricID) in order to speed up `is` search in the loop below.
 	sort.Slice(pendingSpans, func(i, j int) bool {
@@ -880,21 +895,23 @@ func (s *Storage) addIndex(rows []rawRow) error {
 
 		if err := is.createIndexes(sp.traceID, sp.metricID, sp.timestamp); err != nil {
 			if firstError == nil {
-				firstError = fmt.Errorf("error when storing (traceID=%s, metricID=%d) in database: %w", sp.traceID, sp.metricID, err)
+				firstError = fmt.Errorf("error when storing (traceID=%s, metricID=%d) in database: %w", sp.traceID.String(), sp.metricID, err)
 			}
 			continue
 		}
 	}
+
+	putPendingSpans(pendingSpans)
 	return firstError
 }
 
 func (s *Storage) updateCurrMinuteTraceIDs() {
-	hm := s.currMinuteTraceIDs.Load().(*minuteTraceIDs)
 	minute := fasttime.UnixTimestamp() / msecPerMinute
+	currm := s.currMinuteTraceIDs.Load().(*minuteTraceIDs)
 
-	if hm.minute != minute {
+	if currm.minute != minute {
 		s.currMinuteTraceIDs.Store(newMinuteTraceIDs())
-		s.prevMinuteTraceIDs.Store(hm)
+		s.prevMinuteTraceIDs.Store(currm)
 	}
 }
 
