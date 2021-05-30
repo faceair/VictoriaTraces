@@ -63,6 +63,10 @@ func (tr *ScanRange) fromPartitionTime(t time.Time) {
 	tr.MaxTimestamp = maxTime.Unix()*1e3 - 1
 }
 
-const msecPerDay = 24 * 3600 * 1000
+const msecPerMonth = 31 * msecPerDay
 
-const msecPerHour = 3600 * 1000
+const msecPerDay = 24 * msecPerHour
+
+const msecPerHour = 60 * msecPerMinute
+
+const msecPerMinute = 60 * 1000

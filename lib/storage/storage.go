@@ -3,7 +3,6 @@ package storage
 import (
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -21,15 +20,13 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/memory"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/storagepacelimiter"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/timerpool"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/uint64set"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/workingsetcache"
 	"github.com/VictoriaMetrics/fastcache"
 	"github.com/faceair/VictoriaTraces/lib/uint128"
 )
 
 const (
-	msecsPerMonth     = 31 * 24 * 3600 * 1000
-	maxRetentionMsecs = 100 * 12 * msecsPerMonth
+	maxRetentionMsecs = 100 * 12 * msecPerMonth
 )
 
 // Storage represents TSDB storage.
@@ -65,20 +62,11 @@ type Storage struct {
 	metricIDCache   *workingsetcache.Cache
 	metricNameCache *workingsetcache.Cache
 
-	// Fast cache for TraceID values occurred during the current minute.
-	currHourTraceIDs atomic.Value
+	// Fast cache for TraceID values occurred during the current & previous minute.
+	currMinuteTraceIDs atomic.Value
+	prevMinuteTraceIDs atomic.Value
 
-	// Fast cache for TraceID values occurred during the previous minute.
-	prevHourTraceIDs atomic.Value
-
-	// Pending TraceID values to be added to currHourTraceIDs.
-	pendingHourEntriesLock sync.Mutex
-	pendingHourEntries     []TraceID
-
-	// Pending TraceID to be added to nextHourTraceIDs.
-	pendingNextHourTraceIDsLock sync.Mutex
-	pendingNextHourTraceIDs     *uint64set.Set
-	stop                        chan struct{}
+	stop chan struct{}
 
 	currHourTraceIDsUpdaterWG sync.WaitGroup
 	nextHourTraceIDsUpdaterWG sync.WaitGroup
@@ -94,7 +82,7 @@ func OpenStorage(path string, retentionMsecs int64) (*Storage, error) {
 	if retentionMsecs <= 0 {
 		retentionMsecs = maxRetentionMsecs
 	}
-	retentionMonths := (retentionMsecs + (msecsPerMonth - 1)) / msecsPerMonth
+	retentionMonths := (retentionMsecs + (msecPerMonth - 1)) / msecPerMonth
 	s := &Storage{
 		path:            path,
 		cachePath:       path + "/cache",
@@ -118,12 +106,8 @@ func OpenStorage(path string, retentionMsecs int64) (*Storage, error) {
 	s.metricIDCache = s.mustLoadCache("MetricName->MetricID", "metricName_metricID", mem/8)
 	s.metricNameCache = s.mustLoadCache("MetricID->MetricName", "metricID_metricName", mem/8)
 
-	hour := fasttime.UnixHour()
-	hmCurr := s.mustLoadHourTraceIDs(hour, "curr_hour_trace_ids")
-	hmPrev := s.mustLoadHourTraceIDs(hour-1, "prev_hour_trace_ids")
-	s.currHourTraceIDs.Store(hmCurr)
-	s.prevHourTraceIDs.Store(hmPrev)
-	s.pendingNextHourTraceIDs = &uint64set.Set{}
+	s.currMinuteTraceIDs.Store(newMinuteTraceIDs())
+	s.prevMinuteTraceIDs.Store(newMinuteTraceIDs())
 
 	// Load indexdb
 	idbPath := path + "/indexdb"
@@ -197,8 +181,8 @@ type Metrics struct {
 	MetricNameCacheMisses     uint64
 	MetricNameCacheCollisions uint64
 
-	HourMetricIDCacheSize      uint64
-	HourMetricIDCacheSizeBytes uint64
+	MinuteMetricIDCacheSize      uint64
+	MinuteMetricIDCacheSizeBytes uint64
 
 	IndexDBMetrics IndexDBMetrics
 	TableMetrics   TableMetrics
@@ -246,15 +230,11 @@ func (s *Storage) UpdateMetrics(m *Metrics) {
 	m.MetricNameCacheMisses += cs.Misses
 	m.MetricNameCacheCollisions += cs.Collisions
 
-	hmCurr := s.currHourTraceIDs.Load().(*hourTraceIDs)
-	hmPrev := s.prevHourTraceIDs.Load().(*hourTraceIDs)
-	hourMetricIDsLen := hmPrev.m.Len()
-	if hmCurr.m.Len() > hourMetricIDsLen {
-		hourMetricIDsLen = hmCurr.m.Len()
-	}
-	m.HourMetricIDCacheSize += uint64(hourMetricIDsLen)
-	m.HourMetricIDCacheSizeBytes += hmCurr.m.SizeBytes()
-	m.HourMetricIDCacheSizeBytes += hmPrev.m.SizeBytes()
+	hmCurr := s.currMinuteTraceIDs.Load().(*minuteTraceIDs)
+	hmPrev := s.prevMinuteTraceIDs.Load().(*minuteTraceIDs)
+	m.MinuteMetricIDCacheSize += hmPrev.count + hmCurr.count
+	// TODO: fix me
+	m.MinuteMetricIDCacheSizeBytes = 0
 
 	s.idb().UpdateMetrics(&m.IndexDBMetrics)
 	s.tb.UpdateMetrics(&m.TableMetrics)
@@ -288,18 +268,17 @@ func (s *Storage) startCurrHourMetricIDsUpdater() {
 	}()
 }
 
-var currHourMetricIDsUpdateInterval = time.Second * 10
+var currMinuteMetricIDsUpdateInterval = time.Second * 30
 
 func (s *Storage) currHourMetricIDsUpdater() {
-	ticker := time.NewTicker(currHourMetricIDsUpdateInterval)
+	ticker := time.NewTicker(currMinuteMetricIDsUpdateInterval)
 	defer ticker.Stop()
 	for {
 		select {
-		case <-s.stop:
-			s.updateCurrHourTraceIDs()
-			return
 		case <-ticker.C:
-			s.updateCurrHourTraceIDs()
+			s.updateCurrMinuteTraceIDs()
+		case <-s.stop:
+			return
 		}
 	}
 }
@@ -346,113 +325,10 @@ func (s *Storage) MustClose() {
 	s.mustSaveAndStopCache(s.metricIDCache, "MetricName->MetricID", "metricName_metricID")
 	s.mustSaveAndStopCache(s.metricNameCache, "MetricID->MetricName", "metricID_metricName")
 
-	hmCurr := s.currHourTraceIDs.Load().(*hourTraceIDs)
-	s.mustSaveHourTraceIDs(hmCurr, "curr_hour_trace_ids")
-	hmPrev := s.prevHourTraceIDs.Load().(*hourTraceIDs)
-	s.mustSaveHourTraceIDs(hmPrev, "prev_hour_trace_ids")
-
 	// Release lock file.
 	if err := s.flockF.Close(); err != nil {
 		logger.Panicf("FATAL: cannot close lock file %q: %s", s.flockF.Name(), err)
 	}
-}
-
-func (s *Storage) mustLoadHourTraceIDs(hour uint64, name string) *hourTraceIDs {
-	hm := &hourTraceIDs{
-		hour: hour,
-	}
-	path := s.cachePath + "/" + name
-	logger.Infof("loading %s from %q...", name, path)
-	startTime := time.Now()
-	if !fs.IsPathExist(path) {
-		logger.Infof("nothing to load from %q", path)
-		return hm
-	}
-	src, err := ioutil.ReadFile(path)
-	if err != nil {
-		logger.Panicf("FATAL: cannot read %s: %s", path, err)
-	}
-	srcOrigLen := len(src)
-	if len(src) < 24 {
-		logger.Errorf("discarding %s, since it has broken header; got %d bytes; want %d bytes", path, len(src), 24)
-		return hm
-	}
-
-	// Unmarshal header
-	isFull := encoding.UnmarshalUint64(src)
-	src = src[8:]
-	hourLoaded := encoding.UnmarshalUint64(src)
-	src = src[8:]
-	if hourLoaded != hour {
-		logger.Infof("discarding %s, since it contains outdated hour; got %d; want %d", path, hourLoaded, hour)
-		return hm
-	}
-
-	// Unmarshal uint64set
-	m, tail, err := unmarshalUint128Set(src)
-	if err != nil {
-		logger.Infof("discarding %s because cannot load uint64set: %s", path, err)
-		return hm
-	}
-	src = tail
-
-	hm.m = m
-	hm.isFull = isFull != 0
-	logger.Infof("loaded %s from %q in %.3f seconds; entriesCount: %d; sizeBytes: %d", name, path, time.Since(startTime).Seconds(), m.Len(), srcOrigLen)
-	return hm
-}
-
-func (s *Storage) mustSaveHourTraceIDs(hm *hourTraceIDs, name string) {
-	path := s.cachePath + "/" + name
-	logger.Infof("saving %s to %q...", name, path)
-	startTime := time.Now()
-	dst := make([]byte, 0, hm.m.Len()*8+24)
-	isFull := uint64(0)
-	if hm.isFull {
-		isFull = 1
-	}
-
-	// Marshal header
-	dst = encoding.MarshalUint64(dst, isFull)
-	dst = encoding.MarshalUint64(dst, hm.hour)
-
-	// Marshal hm.m
-	dst = marshalUint128Set(dst, hm.m)
-
-	if err := ioutil.WriteFile(path, dst, 0644); err != nil {
-		logger.Panicf("FATAL: cannot write %d bytes to %q: %s", len(dst), path, err)
-	}
-	logger.Infof("saved %s to %q in %.3f seconds; entriesCount: %d; sizeBytes: %d", name, path, time.Since(startTime).Seconds(), hm.m.Len(), len(dst))
-}
-
-func unmarshalUint128Set(src []byte) (*uint128.Set, []byte, error) {
-	mLen := encoding.UnmarshalUint64(src)
-	src = src[8:]
-	if uint64(len(src)) < 8*mLen {
-		return nil, nil, fmt.Errorf("cannot unmarshal uint64set; got %d bytes; want at least %d bytes", len(src), 8*mLen)
-	}
-	var err error
-	var traceID TraceID
-	m := &uint128.Set{}
-	for i := uint64(0); i < mLen; i++ {
-		traceID, src, err = uint128.Unmarshal(src)
-		if err != nil {
-			return nil, nil, fmt.Errorf("cannot unmarshal traceid: %s", err)
-		}
-		m.Add(traceID)
-	}
-	return m, src, nil
-}
-
-func marshalUint128Set(dst []byte, m *uint128.Set) []byte {
-	dst = encoding.MarshalUint64(dst, uint64(m.Len()))
-	m.ForEach(func(part []uint128.Uint128) bool {
-		for _, traceID := range part {
-			dst = traceID.Marshal(dst)
-		}
-		return true
-	})
-	return dst
 }
 
 func (s *Storage) mustLoadCache(info, name string, sizeBytes int) *workingsetcache.Cache {
@@ -924,75 +800,77 @@ func putPendingMetricRows(pmrs *pendingSpanRows) {
 var pendingMetricRowsPool sync.Pool
 
 func (s *Storage) addIndex(rows []rawRow) error {
-	var hour uint64
+	var minute uint64
 	var (
-		// These vars are used for speeding up bulk imports when multiple adjancent rows
-		// contain the same (metricID, date) pairs.
-		prevHour, prevTimestamp uint64
-		prevTraceID             TraceID
+		prevTraceID  TraceID
+		prevMetricID uint64
 	)
-	hm := s.currHourTraceIDs.Load().(*hourTraceIDs)
+	currm := s.currMinuteTraceIDs.Load().(*minuteTraceIDs)
+	prevm := s.currMinuteTraceIDs.Load().(*minuteTraceIDs)
+
 	type pendingSpan struct {
 		timestamp uint64
 		metricID  uint64
 		traceID   TraceID
 	}
-	var pendingHourSpans []pendingSpan
+	var pendingSpans []pendingSpan
 	for i := range rows {
 		r := &rows[i]
 		traceID := r.TraceID
 		metricID := r.MetricID
 		timestamp := uint64(r.Timestamp)
-		if timestamp != prevTimestamp {
-			hour = timestamp / msecPerHour
-			prevTimestamp = timestamp
-		}
-		if hour == hm.hour {
-			// The r belongs to the current hour. Check for the current hour cache.
-			if hm.m.Has(traceID) {
-				// Fast path: the traceID is in the current hour cache.
-				// This means the traceID has been already added to per-day inverted index.
-				continue
-			}
-			s.pendingHourEntriesLock.Lock()
-			s.pendingHourEntries = append(s.pendingHourEntries, traceID)
-			s.pendingHourEntriesLock.Unlock()
-		}
+		minute = timestamp / msecPerMinute
 
-		// Slower path: check global cache for (date, traceID) entry.
-		if traceID == prevTraceID && hour == prevHour {
-			// Fast path for bulk import of multiple rows with the same (date, traceID) pairs.
+		if metricID == prevMetricID && traceID == prevTraceID {
+			// Fast path for bulk import of multiple rows with the same (metricID, traceID) pairs.
 			continue
 		}
-		prevHour = hour
+
+		switch {
+		case minute == currm.minute:
+			// The timestamp belongs to the current minute. Check for the current & previous minute cache.
+			if currm.Has(metricID, traceID) || prevm.Has(metricID, traceID) {
+				// Fast path: the traceID is in the current minute cache.
+				// This means the traceID has been already added to inverted index.
+				continue
+			}
+		case minute == prevm.minute:
+			// The timestamp belongs to the previous minute. Only check for the previous minute cache.
+			if prevm.Has(metricID, traceID) {
+				// Fast path: the traceID is in the previous minute cache.
+				continue
+			}
+		}
+
+		prevMetricID = metricID
 		prevTraceID = traceID
-		pendingHourSpans = append(pendingHourSpans, pendingSpan{
+		pendingSpans = append(pendingSpans, pendingSpan{
 			timestamp: timestamp,
 			traceID:   traceID,
 			metricID:  metricID,
 		})
 	}
 
-	if len(pendingHourSpans) == 0 {
-		// Fast path - there are no new (date, metricID) entires in rows.
+	if len(pendingSpans) == 0 {
+		// Fast path - there are no new (metricID, traceID) entires in rows.
 		return nil
 	}
 
 	// Slow path - add new (date, metricID) entries to indexDB.
-
-	atomic.AddUint64(&s.slowPerDayIndexInserts, uint64(len(pendingHourSpans)))
-
-	sort.Slice(pendingHourSpans, func(i, j int) bool {
-		return pendingHourSpans[i].metricID < pendingHourSpans[j].metricID
+	atomic.AddUint64(&s.slowPerDayIndexInserts, uint64(len(pendingSpans)))
+	// Sort pendingSpans by (metricID) in order to speed up `is` search in the loop below.
+	sort.Slice(pendingSpans, func(i, j int) bool {
+		return pendingSpans[i].metricID < pendingSpans[j].metricID
 	})
 
 	idb := s.idb()
 	is := idb.getIndexSearch(noDeadline)
 	defer idb.putIndexSearch(is)
 	var firstError error
-	var prevMetricID uint64
+
+	prevMetricID = 0
 	prevTraceID.Reset()
-	for _, sp := range pendingHourSpans {
+	for _, sp := range pendingSpans {
 		if sp.traceID == prevTraceID && sp.metricID == prevMetricID {
 			// Fast path for bulk import of multiple rows with the same (traceID, metricID) pairs.
 			continue
@@ -1010,47 +888,46 @@ func (s *Storage) addIndex(rows []rawRow) error {
 	return firstError
 }
 
-func (s *Storage) updateCurrHourTraceIDs() {
-	hm := s.currHourTraceIDs.Load().(*hourTraceIDs)
-	s.pendingHourEntriesLock.Lock()
-	newEntries := append([]TraceID{}, s.pendingHourEntries...)
-	s.pendingHourEntries = s.pendingHourEntries[:0]
-	s.pendingHourEntriesLock.Unlock()
-	hour := fasttime.UnixHour()
-	if len(newEntries) == 0 && hm.hour == hour {
-		// Fast path: nothing to update.
-		return
-	}
+func (s *Storage) updateCurrMinuteTraceIDs() {
+	hm := s.currMinuteTraceIDs.Load().(*minuteTraceIDs)
+	minute := fasttime.UnixTimestamp() / msecPerMinute
 
-	// Slow path: hm.m must be updated with non-empty s.pendingHourEntries.
-	var m *uint128.Set
-	isFull := hm.isFull
-	if hm.hour == hour {
-		m = hm.m.Clone()
-	} else {
-		m = &uint128.Set{}
-		isFull = true
-	}
-
-	for _, x := range newEntries {
-		m.Add(x)
-	}
-
-	hmNew := &hourTraceIDs{
-		m:      m,
-		hour:   hour,
-		isFull: isFull,
-	}
-	s.currHourTraceIDs.Store(hmNew)
-	if hm.hour != hour {
-		s.prevHourTraceIDs.Store(hm)
+	if hm.minute != minute {
+		s.currMinuteTraceIDs.Store(newMinuteTraceIDs())
+		s.prevMinuteTraceIDs.Store(hm)
 	}
 }
 
-type hourTraceIDs struct {
-	m      *uint128.Set
-	hour   uint64
-	isFull bool
+func newMinuteTraceIDs() *minuteTraceIDs {
+	return &minuteTraceIDs{
+		minute:   fasttime.UnixTimestamp() / msecPerMinute,
+		count:    0,
+		size:     0,
+		byMetric: make(map[uint64]*uint128.Set),
+	}
+}
+
+type minuteTraceIDs struct {
+	minute      uint64
+	count, size uint64
+	byMetric    map[uint64]*uint128.Set
+}
+
+func (h *minuteTraceIDs) Has(metricID uint64, traceID TraceID) bool {
+	if u128Set, ok := h.byMetric[metricID]; ok {
+		if ok = u128Set.Has(traceID); ok {
+			return true
+		} else {
+			u128Set.Add(traceID)
+			h.count++
+		}
+	} else {
+		u128Set = &uint128.Set{}
+		u128Set.Add(traceID)
+		h.count++
+		h.byMetric[metricID] = u128Set
+	}
+	return false
 }
 
 func openIndexDBTables(path string, metricIDCache, metricNameCache *workingsetcache.Cache) (curr, prev *indexDB, err error) {
