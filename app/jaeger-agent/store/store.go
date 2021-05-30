@@ -110,14 +110,14 @@ func (s *Store) GetOperations(_ context.Context, query spanstore.OperationQueryP
 		},
 		Limit:     1e4,
 		Forward:   true,
-		FetchData: storage.NotFetch,
+		FetchData: storage.FetchAll,
 	}, deadline)
 	if err != nil {
 		return nil, err
 	}
 
 	var rsLock sync.Mutex
-	operations := make([]spanstore.Operation, 0)
+	operationsMap := make(map[string]map[string]struct{})
 	err = results.RunParallel(func(rs *vmselect.Result, workerID uint) error {
 		for _, value := range rs.Values {
 			span := new(model.Span)
@@ -125,18 +125,27 @@ func (s *Store) GetOperations(_ context.Context, query spanstore.OperationQueryP
 			if err != nil {
 				return err
 			}
-			for _, tag := range span.Tags {
-				if string(tag.Key) == "operation_name" {
-					rsLock.Lock()
-					operations = append(operations, spanstore.Operation{
-						Name: tag.VStr,
-					})
-					rsLock.Unlock()
-				}
+			kind, _ := span.GetSpanKind()
+			rsLock.Lock()
+			kinds, ok := operationsMap[span.OperationName]
+			if !ok {
+				kinds = map[string]struct{}{}
 			}
+			kinds[kind] = struct{}{}
+			operationsMap[span.OperationName] = kinds
+			rsLock.Unlock()
 		}
 		return nil
 	})
+	operations := make([]spanstore.Operation, 0)
+	for operation, kinds := range operationsMap {
+		for kind := range kinds {
+			operations = append(operations, spanstore.Operation{
+				Name:     operation,
+				SpanKind: kind,
+			})
+		}
+	}
 	return operations, nil
 }
 
@@ -243,6 +252,8 @@ func (s *Store) WriteSpan(_ context.Context, span *model.Span) error {
 	if err != nil {
 		return err
 	}
+
+	ctx.FlushBufs()
 
 	rowsInserted.Add(1)
 	return nil

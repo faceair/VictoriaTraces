@@ -34,10 +34,6 @@ func (b *bucket64) copyTo(dst *bucket64) {
 type Set struct {
 	itemsCount int
 	buckets    bucket64Sorter
-
-	// Most likely the buckets contains only a single item, so put it here for performance reasons
-	// in order to improve memory locality.
-	scratchBuckets [1]bucket64
 }
 
 func (s *Set) Len() int {
@@ -124,11 +120,7 @@ func (s *Set) Del(x Uint128) {
 }
 
 func (s *Set) addBucket64() *bucket64 {
-	if len(s.buckets) == 0 {
-		s.buckets = s.scratchBuckets[:]
-	} else {
-		s.buckets = append(s.buckets, bucket64{})
-	}
+	s.buckets = append(s.buckets, bucket64{set: &uint64set.Set{}})
 	return &s.buckets[len(s.buckets)-1]
 }
 
@@ -140,11 +132,7 @@ func (s *Set) Clone() *Set {
 	}
 	var dst Set
 	dst.itemsCount = s.itemsCount
-	if len(s.buckets) == 1 {
-		dst.buckets = dst.scratchBuckets[:]
-	} else {
-		dst.buckets = make([]bucket64, len(s.buckets))
-	}
+	dst.buckets = make([]bucket64, len(s.buckets))
 	for i := range s.buckets {
 		s.buckets[i].copyTo(&dst.buckets[i])
 	}
@@ -162,9 +150,6 @@ func (s *Set) fixItemsCount() {
 func (s *Set) cloneShallow() *Set {
 	var dst Set
 	dst.itemsCount = s.itemsCount
-	if len(s.buckets) == 1 {
-		dst.buckets = dst.scratchBuckets[:]
-	}
 	dst.buckets = append(dst.buckets[:0], s.buckets...)
 	return &dst
 }
