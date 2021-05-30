@@ -27,9 +27,9 @@ const (
 	nsPrefixMetricIDToMetricName = 0
 	nsPrefixMetricNameToMetricID = 1
 
-	nsPrefixTagKeyValue      = 2
-	nsPrefixTagTimeToTraceID = 3
-	nsPrefixTraceIDToTag     = 4
+	nsPrefixTagKeyValue       = 2
+	nsPrefixTagTimeToTraceIDs = 3
+	nsPrefixTraceIDToTag      = 4
 )
 
 func shouldCacheBlock(item []byte) bool {
@@ -638,7 +638,7 @@ func mergeTraceIDs(a, b []TraceID) []TraceID {
 }
 
 func matchTagFilters(mn *SpanName, tfs []*tagFilter, kb *bytesutil.ByteBuffer) (bool, error) {
-	kb.B = marshalCommonPrefix(kb.B[:0], nsPrefixTagTimeToTraceID)
+	kb.B = marshalCommonPrefix(kb.B[:0], nsPrefixTagTimeToTraceIDs)
 
 	for i, tf := range tfs {
 		if len(tf.key) == 0 {
@@ -774,11 +774,14 @@ type tagToTraceIDsRowParser struct {
 	// This is either nsPrefixTagToMetricIDs or nsPrefixDateTagToMetricIDs.
 	NSPrefix byte
 
-	// TraceIDs contains parsed TraceIDs after ParseTraceIDs call
-	TraceIDs []TraceID
-
 	// Tag contains parsed tag after Init call
 	Tag Tag
+
+	// Timestamp
+	Timestamp uint64
+
+	// TraceIDs contains parsed TraceIDs after ParseTraceIDs call
+	TraceIDs []TraceID
 
 	// tail contains the remaining unparsed metricIDs
 	tail []byte
@@ -788,6 +791,7 @@ func (mp *tagToTraceIDsRowParser) Reset() {
 	mp.NSPrefix = 0
 	mp.TraceIDs = mp.TraceIDs[:0]
 	mp.Tag.Reset()
+	mp.Timestamp = 0
 	mp.tail = nil
 }
 
@@ -807,6 +811,11 @@ func (mp *tagToTraceIDsRowParser) Init(b []byte, nsPrefixExpected byte) error {
 	if err != nil {
 		return fmt.Errorf("cannot unmarshal tag from tag->metricIDs row %q: %w", b, err)
 	}
+
+	timestamp := encoding.UnmarshalUint64(tail)
+	mp.Timestamp = timestamp
+	tail = tail[8:]
+
 	return mp.InitOnlyTail(b, tail)
 }
 
@@ -814,6 +823,7 @@ func (mp *tagToTraceIDsRowParser) Init(b []byte, nsPrefixExpected byte) error {
 func (mp *tagToTraceIDsRowParser) MarshalPrefix(dst []byte) []byte {
 	dst = marshalCommonPrefix(dst, mp.NSPrefix)
 	dst = mp.Tag.Marshal(dst)
+	dst = encoding.MarshalUint64(dst, mp.Timestamp)
 	return dst
 }
 
@@ -839,6 +849,9 @@ func (mp *tagToTraceIDsRowParser) EqualPrefix(x *tagToTraceIDsRowParser) bool {
 	if !mp.Tag.Equal(&x.Tag) {
 		return false
 	}
+	if mp.Timestamp != x.Timestamp {
+		return false
+	}
 	return mp.NSPrefix == x.NSPrefix
 }
 
@@ -851,7 +864,7 @@ func (mp *tagToTraceIDsRowParser) TraceIDsLen() int {
 func (mp *tagToTraceIDsRowParser) ParseTraceIDs() {
 	tail := mp.tail
 	mp.TraceIDs = mp.TraceIDs[:0]
-	n := len(tail) / 8
+	n := len(tail) / 16
 	if n <= cap(mp.TraceIDs) {
 		mp.TraceIDs = mp.TraceIDs[:n]
 	} else {
@@ -860,8 +873,8 @@ func (mp *tagToTraceIDsRowParser) ParseTraceIDs() {
 	traceIDs := mp.TraceIDs
 	_ = traceIDs[n-1]
 	for i := 0; i < n; i++ {
-		if len(tail) < 8 {
-			logger.Panicf("BUG: tail cannot be smaller than 8 bytes; got %d bytes; tail=%X", len(tail), tail)
+		if len(tail) < 16 {
+			logger.Panicf("BUG: tail cannot be smaller than 16 bytes; got %d bytes; tail=%X", len(tail), tail)
 			return
 		}
 
@@ -885,7 +898,7 @@ func (mp *tagToTraceIDsRowParser) HasCommonTraceIDs(filter *uint128.Set) bool {
 }
 
 func mergeTagToTraceIDsRows(data []byte, items [][]byte) ([]byte, [][]byte) {
-	data, items = mergeTagToTraceIDsRowsInternal(data, items, nsPrefixTagTimeToTraceID)
+	data, items = mergeTagToTraceIDsRowsInternal(data, items, nsPrefixTagTimeToTraceIDs)
 	return data, items
 }
 

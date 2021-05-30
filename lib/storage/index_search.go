@@ -43,7 +43,7 @@ func (is *indexSearch) createIndexes(traceID TraceID, metricID, timestamp uint64
 	for i := range mn.Tags {
 		tag := &mn.Tags[i]
 
-		items.B = is.marshalCommonPrefix(items.B, nsPrefixTagTimeToTraceID)
+		items.B = is.marshalCommonPrefix(items.B, nsPrefixTagTimeToTraceIDs)
 		items.B = tag.Marshal(items.B)
 		items.B = encoding.MarshalUint64(items.B, timestamp)
 		items.B = traceID.Marshal(items.B)
@@ -278,7 +278,7 @@ func (is *indexSearch) updateTraceIDsAll(traceIDs *uint128.Set, limit int) error
 	kb := kbPool.Get()
 	defer kbPool.Put(kb)
 	// Extract all the metricIDs from (__name__=value)->metricIDs entries.
-	kb.B = is.marshalCommonPrefix(kb.B[:0], nsPrefixTagTimeToTraceID)
+	kb.B = is.marshalCommonPrefix(kb.B[:0], nsPrefixTagTimeToTraceIDs)
 	kb.B = marshalTagValue(kb.B, nil)
 	return is.updateTraceIDsForPrefix(kb.B, traceIDs, limit)
 }
@@ -411,7 +411,7 @@ func (is *indexSearch) getTraceIDsByTimeRangeTagFilter(tf *tagFilter, commonPref
 	}
 	kb := kbPool.Get()
 	defer kbPool.Put(kb)
-	kb.B = is.marshalCommonPrefix(kb.B[:0], nsPrefixTagTimeToTraceID)
+	kb.B = is.marshalCommonPrefix(kb.B[:0], nsPrefixTagTimeToTraceIDs)
 	kb.B = append(kb.B, tf.prefix[len(commonPrefix):]...)
 
 	tfNew := *tf

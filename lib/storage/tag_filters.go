@@ -26,7 +26,7 @@ type TagFilters struct {
 // NewTagFilters returns new TagFilters for the given.
 func NewTagFilters() *TagFilters {
 	return &TagFilters{
-		commonPrefix: marshalCommonPrefix(nil, nsPrefixTagTimeToTraceID),
+		commonPrefix: marshalCommonPrefix(nil, nsPrefixTagTimeToTraceIDs),
 	}
 }
 
@@ -131,7 +131,7 @@ func (tfs *TagFilters) String() string {
 // Reset resets the tf
 func (tfs *TagFilters) Reset() {
 	tfs.tfs = tfs.tfs[:0]
-	tfs.commonPrefix = marshalCommonPrefix(tfs.commonPrefix[:0], nsPrefixTagTimeToTraceID)
+	tfs.commonPrefix = marshalCommonPrefix(tfs.commonPrefix[:0], nsPrefixTagTimeToTraceIDs)
 }
 
 func (tfs *TagFilters) marshal(dst []byte) []byte {
