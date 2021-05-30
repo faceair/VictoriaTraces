@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,6 +19,10 @@ import (
 	"github.com/jaegertracing/jaeger/storage/dependencystore"
 	"github.com/jaegertracing/jaeger/storage/spanstore"
 )
+
+var isInTest = func() bool {
+	return strings.HasSuffix(os.Args[0], ".test")
+}()
 
 var rowsInserted = metrics.NewCounter(`vm_rows_inserted_total{type="span"}`)
 
@@ -42,7 +48,7 @@ func (s *Store) GetTrace(_ context.Context, traceID model.TraceID) (*model.Trace
 	deadline := searchutils.NewDeadline(time.Now(), time.Minute, "")
 
 	results, _, err := vmselect.ProcessSearchQuery(false, &storage.SearchQuery{
-		MinTimestamp: timestampFromTime(time.Now().Add(-time.Hour * 24 * 7)),
+		MinTimestamp: timestampFromTime(time.Now().Add(-time.Hour)),
 		MaxTimestamp: timestampFromTime(time.Now()),
 		TagFilterss: [][]storage.TagFilter{
 			{
@@ -152,25 +158,10 @@ func (s *Store) GetOperations(_ context.Context, query spanstore.OperationQueryP
 func (s *Store) FindTraces(_ context.Context, query *spanstore.TraceQueryParameters) ([]*model.Trace, error) {
 	deadline := searchutils.NewDeadline(time.Now(), time.Minute, "")
 
-	results, _, err := vmselect.ProcessSearchQuery(false, &storage.SearchQuery{
-		MinTimestamp: timestampFromTime(query.StartTimeMin),
-		MaxTimestamp: timestampFromTime(query.StartTimeMax),
-		TagFilterss: [][]storage.TagFilter{
-			{
-				{
-					Key:   []byte("service"),
-					Value: []byte(query.ServiceName),
-				},
-				{
-					Key:   []byte("operation_name"),
-					Value: []byte(query.OperationName),
-				},
-			},
-		},
-		Limit:     query.NumTraces,
-		Forward:   true,
-		FetchData: storage.FetchAll,
-	}, deadline)
+	searchQuery := traceQueryToSearchQuery(query)
+	searchQuery.FetchData = storage.FetchAll
+
+	results, _, err := vmselect.ProcessSearchQuery(false, searchQuery, deadline)
 	if err != nil {
 		return nil, err
 	}
@@ -202,25 +193,7 @@ func (s *Store) FindTraces(_ context.Context, query *spanstore.TraceQueryParamet
 func (s *Store) FindTraceIDs(_ context.Context, query *spanstore.TraceQueryParameters) ([]model.TraceID, error) {
 	deadline := searchutils.NewDeadline(time.Now(), time.Minute, "")
 
-	results, _, err := vmselect.SearchTraceIDs(false, &storage.SearchQuery{
-		MinTimestamp: timestampFromTime(query.StartTimeMin),
-		MaxTimestamp: timestampFromTime(query.StartTimeMax),
-		TagFilterss: [][]storage.TagFilter{
-			{
-				{
-					Key:   []byte("service"),
-					Value: []byte(query.ServiceName),
-				},
-				{
-					Key:   []byte("operation_name"),
-					Value: []byte(query.OperationName),
-				},
-			},
-		},
-		Limit:     query.NumTraces,
-		Forward:   true,
-		FetchData: storage.NotFetch,
-	}, deadline)
+	results, _, err := vmselect.SearchTraceIDs(false, traceQueryToSearchQuery(query), deadline)
 	if err != nil {
 		return nil, err
 	}
@@ -253,7 +226,11 @@ func (s *Store) WriteSpan(_ context.Context, span *model.Span) error {
 		return err
 	}
 
-	ctx.FlushBufs()
+	if isInTest {
+		if err = ctx.FlushBufs(); err != nil {
+			return err
+		}
+	}
 
 	rowsInserted.Add(1)
 	return nil
@@ -272,4 +249,32 @@ func timestampFromTime(t time.Time) int64 {
 	// There is no need in converting t to UTC, since UnixNano must
 	// return the same value for any timezone.
 	return t.UnixNano() / 1e6
+}
+
+func traceQueryToSearchQuery(query *spanstore.TraceQueryParameters) *storage.SearchQuery {
+	if query.StartTimeMin.IsZero() {
+		query.StartTimeMin = time.Now().Add(-time.Hour)
+	}
+	if query.StartTimeMax.IsZero() {
+		query.StartTimeMax = time.Now()
+	}
+
+	ts := []storage.TagFilter{{
+		Key:   []byte("service"),
+		Value: []byte(query.ServiceName),
+	}}
+	if query.OperationName != "" {
+		ts = append(ts, storage.TagFilter{
+			Key:   []byte("operation_name"),
+			Value: []byte(query.OperationName),
+		})
+	}
+	return &storage.SearchQuery{
+		MinTimestamp: timestampFromTime(query.StartTimeMin),
+		MaxTimestamp: timestampFromTime(query.StartTimeMax),
+		TagFilterss:  [][]storage.TagFilter{ts},
+		Limit:        query.NumTraces,
+		Forward:      true,
+		FetchData:    storage.NotFetch,
+	}
 }
