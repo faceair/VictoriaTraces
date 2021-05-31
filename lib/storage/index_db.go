@@ -29,7 +29,6 @@ const (
 
 	nsPrefixTagKeyValue       = 2
 	nsPrefixTagTimeToTraceIDs = 3
-	nsPrefixTraceIDToTag      = 4
 )
 
 func shouldCacheBlock(item []byte) bool {

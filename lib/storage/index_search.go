@@ -48,11 +48,6 @@ func (is *indexSearch) createIndexes(traceID TraceID, metricID, timestamp uint64
 		items.B = encoding.MarshalUint64(items.B, timestamp)
 		items.B = traceID.Marshal(items.B)
 		items.Next()
-
-		items.B = is.marshalCommonPrefix(items.B, nsPrefixTraceIDToTag)
-		items.B = traceID.Marshal(items.B)
-		items.B = tag.Marshal(items.B)
-		items.Next()
 	}
 	if err = is.db.tb.AddItems(items.Items); err != nil {
 		return fmt.Errorf("cannot add per-day entires for metricID %d: %w", metricID, err)
