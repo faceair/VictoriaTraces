@@ -242,14 +242,6 @@ func (is *indexSearch) updateMetricIDsByMetricNameMatch(metricIDs, srcMetricIDs 
 func (is *indexSearch) searchTraceIDs(tfss []*TagFilters, tr ScanRange) ([]TraceID, error) {
 	traceIDs := &uint128.Set{}
 	for _, tfs := range tfss {
-		if len(tfs.tfs) == 0 {
-			// Return all the metric ids
-			if err := is.updateTraceIDsAll(traceIDs, tr.Limit); err != nil {
-				return nil, err
-			}
-			// Stop the iteration, since we cannot find more metric ids with the remaining tfss.
-			break
-		}
 		for i := range tfs.tfs {
 			tf := &tfs.tfs[i]
 			if len(tf.key) == 0 && !tf.isNegative && !tf.isRegexp {
@@ -272,54 +264,6 @@ func (is *indexSearch) searchTraceIDs(tfss []*TagFilters, tr ScanRange) ([]Trace
 		return nil, nil
 	}
 	return traceIDs.AppendTo(nil), nil
-}
-
-func (is *indexSearch) updateTraceIDsAll(traceIDs *uint128.Set, limit int) error {
-	kb := kbPool.Get()
-	defer kbPool.Put(kb)
-	// Extract all the metricIDs from (__name__=value)->metricIDs entries.
-	kb.B = is.marshalCommonPrefix(kb.B[:0], nsPrefixTagTimeToTraceIDs)
-	kb.B = marshalTagValue(kb.B, nil)
-	return is.updateTraceIDsForPrefix(kb.B, traceIDs, limit)
-}
-
-func (is *indexSearch) updateTraceIDsForPrefix(prefix []byte, traceIDs *uint128.Set, limit int) error {
-	ts := &is.ts
-	mp := &is.mp
-	loopsPaceLimiter := 0
-	ts.Seek(prefix)
-	for ts.NextItem() {
-		if loopsPaceLimiter&paceLimiterFastIterationsMask == 0 {
-			if err := checkSearchDeadlineAndPace(is.deadline); err != nil {
-				return err
-			}
-		}
-		loopsPaceLimiter++
-		item := ts.Item
-		if !bytes.HasPrefix(item, prefix) {
-			return nil
-		}
-		tail := item[len(prefix):]
-		n := bytes.IndexByte(tail, tagSeparatorChar)
-		if n < 0 {
-			return fmt.Errorf("invalid tag->metricIDs line %q: cannot find tagSeparatorChar %d", item, tagSeparatorChar)
-		}
-		tail = tail[n+1:]
-		if err := mp.InitOnlyTail(item, tail); err != nil {
-			return err
-		}
-		mp.ParseTraceIDs()
-		remain := limit - traceIDs.Len()
-		if len(mp.TraceIDs) > remain {
-			traceIDs.AddMulti(mp.TraceIDs[:remain])
-			return nil
-		}
-		traceIDs.AddMulti(mp.TraceIDs)
-	}
-	if err := ts.Error(); err != nil {
-		return fmt.Errorf("error when searching for all metricIDs by prefix %q: %w", prefix, err)
-	}
-	return nil
 }
 
 func (is *indexSearch) getTraceIDsByScanRange(tfs *TagFilters, sr ScanRange) (*uint128.Set, error) {
