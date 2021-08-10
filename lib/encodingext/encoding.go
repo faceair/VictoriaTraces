@@ -6,7 +6,6 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
-	"github.com/faceair/VictoriaTraces/lib/decimalext"
 )
 
 // MarshalType is the type used for the marshaling.
@@ -63,7 +62,7 @@ func marshalBytesArray(dst []byte, a [][]byte) (result []byte, mt MarshalType) {
 
 func unmarshalBytesArray(dst [][]byte, src []byte, mt MarshalType, itemsCount int) ([][]byte, error) {
 	// Extend dst capacity in order to eliminate memory allocations below.
-	dst = decimalext.ExtendBytesArrayCapacity(dst, itemsCount)
+	dst = extendBytesArrayCapacity(dst, itemsCount)
 
 	switch mt {
 	case MarshalTypeZSTDBytesArray:
@@ -94,17 +93,27 @@ func unmarshalBytesArray(dst [][]byte, src []byte, mt MarshalType, itemsCount in
 
 var bbPool bytesutil.ByteBufferPool
 
-func getCompressLevel(itemsCount int) int {
-	if itemsCount <= 1<<6 {
+// extendBytesArrayCapacity extends dst capacity to hold additionalItems
+// and returns the extended dst.
+func extendBytesArrayCapacity(dst [][]byte, additionalItems int) [][]byte {
+	dstLen := len(dst)
+	if n := dstLen + additionalItems - cap(dst); n > 0 {
+		dst = append(dst[:cap(dst)], make([][]byte, n)...)
+	}
+	return dst[:dstLen]
+}
+
+func getCompressLevel(size int) int {
+	if size <= 1<<6 {
 		return 1
 	}
-	if itemsCount <= 1<<8 {
+	if size <= 1<<8 {
 		return 2
 	}
-	if itemsCount <= 1<<10 {
+	if size <= 1<<10 {
 		return 3
 	}
-	if itemsCount <= 1<<12 {
+	if size <= 1<<12 {
 		return 4
 	}
 	return 5
